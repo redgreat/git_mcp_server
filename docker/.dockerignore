@@ -1,0 +1,5 @@
+# PostgreSQL 数据
+pgdata/
+
+# Git bare repos
+git_repos/

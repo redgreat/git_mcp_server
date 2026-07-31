@@ -1,0 +1,56 @@
+# git_mcp_server 配置文件示例
+# 使用方法：复制此文件为 config.yml 并修改相应配置
+
+# 服务配置
+server:
+  host: 0.0.0.0
+  port: 3001
+  # MCP 返回链接时的公网根地址
+  # public_base_url: https://git-mcp-server.example.com
+
+# 加密密钥配置
+security:
+  # ⚠️ 生产环境必须修改为随机生成的强密钥！
+  master_key: change_this_master_key_in_production
+  jwt_secret: change_this_jwt_secret_in_production
+  session_timeout: 3600  # 会话超时时间（秒）
+
+# 管理数据库配置（PostgreSQL）
+admin_database:
+  host: localhost
+  port: 5432
+  database: git_mcp_admin
+  username: git_mcp_admin
+  password: change_this_password
+  pool_size: 10
+  max_overflow: 20
+
+# Git 仓库本地存储配置
+git_storage:
+  # Bare repo 本地存储根目录
+  base_dir: /data/git_repos
+  # 缓存过期时间（秒），超时未访问的仓库可被清理
+  cache_ttl: 86400
+  # 自动 fetch 间隔（秒）
+  fetch_interval: 300
+  # 最大并发 fetch 数
+  max_fetch_workers: 5
+
+# 日志配置
+logging:
+  level: INFO
+  dir: logs
+  # 审计日志写入数据库
+  audit_to_database: true
+  # 同时也写入文件
+  audit_to_file: true
+
+object_storage:
+  enabled: false
+  provider: ali-oss
+  endpoint: oss-cn-hangzhou.aliyuncs.com
+  bucket: your-bucket-name
+  access_key_id: your-ak
+  access_key_secret: your-sk
+  path_prefix: git_mcp_server/
+  public_base_url: https://your-bucket-name.oss-cn-hangzhou.aliyuncs.com

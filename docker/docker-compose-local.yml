@@ -1,0 +1,56 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: git_mcp_pg
+    environment:
+      POSTGRES_DB: git_mcp_admin
+      POSTGRES_USER: git_mcp_admin
+      POSTGRES_PASSWORD: git_mcp_dev
+    volumes:
+      - pgdata_local:/var/lib/postgresql/data
+    networks:
+      - gitmcp_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U git_mcp_admin -d git_mcp_admin"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  git-mcp-server:
+    build:
+      context: ..
+      dockerfile: DockerfileLocal
+    image: git_mcp_server:latest
+    container_name: git_mcp_server
+    init: true
+    ports:
+      - "3001:3001"
+    environment:
+      - TZ=Asia/Shanghai
+      - LANG=zh_CN.UTF-8
+      - CONFIG_PATH=/app/config/config.yml
+      - DB_HOST=postgres
+      - DB_PORT=5432
+    volumes:
+      - ../logs:/app/logs
+      - ../config:/app/config
+      - ../data/git_repos:/data/git_repos
+    networks:
+      - gitmcp_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+networks:
+  gitmcp_network:
+    driver: bridge
+
+volumes:
+  pgdata_local:

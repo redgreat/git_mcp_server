@@ -1,0 +1,14 @@
+# 排除不需要打进镜像的文件
+frontend/node_modules
+frontend/.svelte-kit
+frontend/build
+.git
+.gitignore
+.venv
+logs
+*.pyc
+__pycache__
+docker/data
+test
+docs
+data

@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+/* DaisyUI 5 uses @plugin, 仅启用 light/dark 两个主题 */
+@plugin "daisyui" {
+  themes: light --default, dark;
+}
+
+/* ============ 主题变量（亮色默认） ============ */
+:root {
+  --c-page-bg: #f1f5f9;                 /* 页面主区背景 */
+  --c-surface: #ffffff;                 /* 卡片 / 侧边栏 / 下拉面板 */
+  --c-surface-glass: rgba(255, 255, 255, 0.82); /* 顶栏玻璃拟态 */
+  --c-text: #1f2937;                    /* 主文字 */
+  --c-text-secondary: #64748b;          /* 次要文字 */
+  --c-border: #e5e7eb;                  /* 边框 */
+  --c-primary: #3b82f6;                 /* 主色（蓝） */
+  --c-primary-deep: #4f46e5;            /* 主色渐变深端（靛蓝） */
+  --c-hover: rgba(59, 130, 246, 0.08);  /* 悬停底色 */
+  --c-error: #ef4444;
+  --c-info: #3b82f6;
+}
+
+/* ============ 主题变量（暗色覆盖） ============ */
+[data-theme='dark'] {
+  --c-page-bg: #0f172a;
+  --c-surface: #1e293b;
+  --c-surface-glass: rgba(15, 23, 42, 0.85);
+  --c-text: #e2e8f0;
+  --c-text-secondary: #94a3b8;
+  --c-border: #334155;
+  --c-primary: #3b82f6;
+  --c-primary-deep: #6366f1;
+  --c-hover: rgba(148, 163, 184, 0.12);
+  --c-error: #f87171;
+  --c-info: #60a5fa;
+}
