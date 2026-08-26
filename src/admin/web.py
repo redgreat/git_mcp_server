@@ -815,17 +815,14 @@ def build_admin_router(cfg: Config, repo_manager=None):
 
     @router.get("/api/version")
     def version():
-        """返回当前应用版本号（从 git 标签获取）"""
-        import subprocess
-        try:
-            result = subprocess.run(
-                ['git', 'describe', '--tags', '--abbrev=0'],
-                capture_output=True, text=True, cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-            )
-            if result.returncode == 0:
-                return {"version": result.stdout.strip()}
-        except Exception:
-            pass
+        """返回当前应用版本号"""
+        # 优先从版本文件读取（Docker 构建时注入）
+        version_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'version.txt')
+        if os.path.exists(version_file):
+            with open(version_file, 'r') as f:
+                ver = f.read().strip()
+                if ver:
+                    return {"version": ver}
         # 备选：从环境变量或默认值
         return {"version": os.getenv("APP_VERSION", "v0.1.0")}
 

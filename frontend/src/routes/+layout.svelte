@@ -270,7 +270,7 @@
     <!-- Sidebar -->
     <div class="drawer-side z-40">
       <label for="drawer" class="drawer-overlay"></label>
-      <aside class="bg-[var(--c-surface)] w-64 min-h-full flex flex-col border-r border-[var(--c-border)]">
+      <aside class="bg-[var(--c-surface)] min-h-full flex flex-col border-r border-[var(--c-border)] transition-all duration-300" class:w-64={!menuCollapsed} class:w-16={menuCollapsed}>
         <!-- 品牌 Logo -->
         <a href="/admin/dashboard" class="flex items-center gap-3 px-4 py-4 border-b border-[var(--c-border)]">
           <svg viewBox="0 0 64 64" class="h-10 w-10 shrink-0 drop-shadow-md" aria-label="Git MCP">
@@ -289,10 +289,12 @@
             <circle cx="20" cy="46" r="6" fill="#ffffff" />
             <circle cx="46" cy="46" r="6" fill="#ffffff" />
           </svg>
-          <div>
-            <div class="text-lg font-bold text-[var(--c-text)] leading-tight">Git MCP Server</div>
-            <div class="text-xs text-[var(--c-text-secondary)] mt-0.5">v{appVersion.replace('v', '')}</div>
-          </div>
+          {#if !menuCollapsed}
+            <div>
+              <div class="text-lg font-bold text-[var(--c-text)] leading-tight">Git MCP Server</div>
+              <div class="text-xs text-[var(--c-text-secondary)] mt-0.5">v{appVersion.replace('v', '')}</div>
+            </div>
+          {/if}
         </a>
 
         <!-- 菜单折叠按钮 -->
@@ -314,19 +316,25 @@
 
         <!-- 菜单列表 -->
         <nav class="flex-1 overflow-y-auto py-2">
-          <ul class="space-y-1 px-2">
+          <ul class="space-y-1" class:px-2={!menuCollapsed} class:px-1={menuCollapsed}>
             {#each menuItems as item}
               {#if !item.adminOnly || user?.role === 'admin'}
                 <li>
                   <a
                     href={item.path}
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 group"
+                    class="flex items-center rounded-lg transition-all duration-200 group"
+                    class:gap-3={!menuCollapsed}
+                    class:justify-center={menuCollapsed}
+                    class:px-3={!menuCollapsed}
+                    class:px-2={menuCollapsed}
+                    class:py-2.5={true}
                     class:bg-gradient-to-r={$page.url.pathname === item.path}
                     class:from-blue-500={$page.url.pathname === item.path}
                     class:to-indigo-600={$page.url.pathname === item.path}
                     class:text-white={$page.url.pathname === item.path}
                     class:text-[var(--c-text)]={$page.url.pathname !== item.path}
                     class:hover:bg-[var(--c-hover)]={$page.url.pathname !== item.path}
+                    title={menuCollapsed ? item.label : ''}
                   >
                     <span class="text-lg">{item.icon}</span>
                     {#if !menuCollapsed}
@@ -340,14 +348,14 @@
         </nav>
 
         <!-- 底部版权信息 -->
-        <div class="border-t border-[var(--c-border)] px-4 py-3 text-center">
+        <div class="border-t border-[var(--c-border)] py-3 text-center">
           {#if !menuCollapsed}
-            <div class="text-xs text-[var(--c-text-secondary)]">
+            <div class="px-4 text-xs text-[var(--c-text-secondary)]">
               @2026-{new Date().getFullYear()} wangcw
             </div>
           {:else}
             <div class="text-xs text-[var(--c-text-secondary)]">
-              @{(new Date().getFullYear())} wangcw
+              @{(new Date().getFullYear())}
             </div>
           {/if}
         </div>
