@@ -180,9 +180,8 @@
         </button>
       </div>
 
-      <p class="mt-8 text-center text-xs text-[var(--c-text-secondary)]">默认账号 admin / admin123，请登录后及时修改</p>
     </div>
 
-    <p class="mt-6 text-center text-sm text-blue-100/70">© 2026 Git MCP Server · Powered by FastAPI + Svelte</p>
+    <p class="mt-6 text-center text-sm text-blue-100/70">@2026-{new Date().getFullYear()} wangcw</p>
   </div>
 </div>

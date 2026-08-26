@@ -492,8 +492,11 @@ def build_admin_router(cfg: Config, repo_manager=None):
     def fetch_repo(repo_id: int, authorization: str = Header(None),
                    request: Request = None):
         """手动拉取仓库最新代码（首次会触发克隆）"""
-        from ..server import _repo_manager, _get_repo_credential
+        from ..server import _get_repo_credential
         from sqlalchemy import func as sa_func
+
+        if repo_manager is None:
+            raise HTTPException(status_code=500, detail="仓库管理器未初始化")
 
         user = _get_user(authorization)
         with Session(engine) as session:
@@ -508,16 +511,16 @@ def build_admin_router(cfg: Config, repo_manager=None):
         username, password = _get_repo_credential(engine, repo_id)
 
         try:
-            status = _repo_manager.get_repo_status(repo_id)
+            status = repo_manager.get_repo_status(repo_id)
             if status:
                 # 已缓存：强制 fetch 并统计
-                result = _repo_manager.fetch_and_report(repo_id, username, password)
+                result = repo_manager.fetch_and_report(repo_id, username, password)
                 if result["error"]:
                     raise HTTPException(status_code=500, detail=f"拉取失败: {result['error']}")
                 message = f"拉取完成：{result['fetched']} 个引用，{result['updated']} 个有更新"
             else:
                 # 未缓存：触发首次克隆（等价于拉到最新）
-                _repo_manager.get_repo(repo_id, repo_name, repo_url, username, password)
+                repo_manager.get_repo(repo_id, repo_name, repo_url, username, password)
                 message = "首次克隆完成，已获取最新代码"
         except HTTPException:
             raise
@@ -807,6 +810,24 @@ def build_admin_router(cfg: Config, repo_manager=None):
                  "duration_ms": r["duration_ms"],
                  "status": r["status"]}
                 for r in rows]
+
+    # ========== 版本信息 ==========
+
+    @router.get("/api/version")
+    def version():
+        """返回当前应用版本号（从 git 标签获取）"""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ['git', 'describe', '--tags', '--abbrev=0'],
+                capture_output=True, text=True, cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            )
+            if result.returncode == 0:
+                return {"version": result.stdout.strip()}
+        except Exception:
+            pass
+        # 备选：从环境变量或默认值
+        return {"version": os.getenv("APP_VERSION", "v0.1.0")}
 
     # ========== 仪表盘 ==========
 

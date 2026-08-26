@@ -7,13 +7,40 @@
   let token = $state('');
   let user = $state(null);
   let checking = $state(true);
+  let appVersion = $state('v0.1.0');
 
   // 主题切换（light / dark）
   let theme = $state('light');
 
+  // 菜单折叠状态：默认折叠，点击后保持展开
+  let menuCollapsed = $state(true);
+  let manuallyToggled = $state(false);
+
+  // 用户手动切换菜单状态
+  function toggleMenu() {
+    menuCollapsed = !menuCollapsed;
+    manuallyToggled = true;
+  }
+
   $effect(() => {
     theme = localStorage.getItem('theme') || 'light';
     document.documentElement.dataset.theme = theme;
+  });
+
+  // 获取版本号
+  $effect(() => {
+    fetch('/api/version')
+      .then(r => r.json())
+      .then(data => { appVersion = data.version; })
+      .catch(() => {});
+  });
+
+  // 监听页面变化，非手动切换时恢复默认折叠状态
+  $effect(() => {
+    $page.url.pathname;
+    if (!manuallyToggled) {
+      menuCollapsed = true;
+    }
   });
 
   function toggleTheme() {
@@ -45,6 +72,18 @@
     '/admin/llm': '大模型'
   };
   const pageTitle = $derived(pageTitles[$page.url.pathname] || 'Git MCP');
+
+  // 菜单项
+  const menuItems = [
+    { path: '/admin/dashboard', icon: '📊', label: '仪表盘' },
+    { path: '/admin/repos', icon: '📦', label: '仓库管理' },
+    { path: '/admin/credentials', icon: '🔑', label: '凭据管理' },
+    { path: '/admin/keys', icon: '🗝️', label: 'Access Key' },
+    { path: '/admin/permissions', icon: '🔒', label: '权限分配' },
+    { path: '/admin/audit', icon: '📋', label: '审计日志' },
+    { path: '/admin/users', icon: '👥', label: '用户管理', adminOnly: true },
+    { path: '/admin/llm', icon: '🤖', label: '大模型' }
+  ];
 
   $effect(() => {
     token = localStorage.getItem('token') || '';
@@ -133,7 +172,6 @@
     <span class="loading loading-spinner loading-lg"></span>
   </div>
 {:else if !token && !isLoginPage}
-  <!-- 未登录且访问非登录页：自动跳转到登录页 -->
   <div class="min-h-screen flex items-center justify-center bg-base-200">
     <div class="text-center">
       <span class="loading loading-spinner loading-lg"></span>
@@ -141,7 +179,6 @@
     </div>
   </div>
 {:else if !token && isLoginPage}
-  <!-- 登录页：直接渲染表单，不做鉴权拦截 -->
   {@render children()}
 {:else}
   <div class="drawer lg:drawer-open">
@@ -233,9 +270,9 @@
     <!-- Sidebar -->
     <div class="drawer-side z-40">
       <label for="drawer" class="drawer-overlay"></label>
-      <aside class="bg-[var(--c-surface)] w-64 min-h-full p-4 flex flex-col border-r border-[var(--c-border)]">
+      <aside class="bg-[var(--c-surface)] w-64 min-h-full flex flex-col border-r border-[var(--c-border)]">
         <!-- 品牌 Logo -->
-        <a href="/admin/dashboard" class="flex items-center gap-3 px-2 py-3 mb-6">
+        <a href="/admin/dashboard" class="flex items-center gap-3 px-4 py-4 border-b border-[var(--c-border)]">
           <svg viewBox="0 0 64 64" class="h-10 w-10 shrink-0 drop-shadow-md" aria-label="Git MCP">
             <defs>
               <linearGradient id="logo-g" x1="0" y1="0" x2="1" y2="1">
@@ -254,24 +291,66 @@
           </svg>
           <div>
             <div class="text-lg font-bold text-[var(--c-text)] leading-tight">Git MCP Server</div>
-            <div class="text-sm text-[var(--c-text-secondary)] mt-0.5">仓库管理服务</div>
+            <div class="text-xs text-[var(--c-text-secondary)] mt-0.5">v{appVersion.replace('v', '')}</div>
           </div>
         </a>
 
-        <ul class="menu menu-sm flex-1 gap-1">
-          <li><a href="/admin/dashboard" class="text-base">📊 仪表盘</a></li>
-          <li><a href="/admin/repos" class="text-base">📦 仓库管理</a></li>
-          <li><a href="/admin/credentials" class="text-base">🔑 凭据管理</a></li>
-          <li><a href="/admin/keys" class="text-base">🗝️ Access Key</a></li>
-          <li><a href="/admin/permissions" class="text-base">🔒 权限分配</a></li>
-          <li><a href="/admin/audit" class="text-base">📋 审计日志</a></li>
-          {#if user?.role === 'admin'}
-            <li><a href="/admin/users" class="text-base">👥 用户管理</a></li>
+        <!-- 菜单折叠按钮 -->
+        <button
+          class="flex items-center justify-center py-2 text-[var(--c-text-secondary)] hover:text-[var(--c-text)] hover:bg-[var(--c-hover)] transition-colors border-b border-[var(--c-border)]"
+          onclick={toggleMenu}
+          title={menuCollapsed ? '展开菜单' : '折叠菜单'}
+        >
+          {#if menuCollapsed}
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+            </svg>
+          {:else}
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+            </svg>
           {/if}
-          <li><a href="/admin/llm" class="text-base">🤖 大模型</a></li>
-        </ul>
+        </button>
 
-        <div class="border-t pt-3 mt-2 text-xs text-[var(--c-text-secondary)] text-center">v0.1.0</div>
+        <!-- 菜单列表 -->
+        <nav class="flex-1 overflow-y-auto py-2">
+          <ul class="space-y-1 px-2">
+            {#each menuItems as item}
+              {#if !item.adminOnly || user?.role === 'admin'}
+                <li>
+                  <a
+                    href={item.path}
+                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 group"
+                    class:bg-gradient-to-r={$page.url.pathname === item.path}
+                    class:from-blue-500={$page.url.pathname === item.path}
+                    class:to-indigo-600={$page.url.pathname === item.path}
+                    class:text-white={$page.url.pathname === item.path}
+                    class:text-[var(--c-text)]={$page.url.pathname !== item.path}
+                    class:hover:bg-[var(--c-hover)]={$page.url.pathname !== item.path}
+                  >
+                    <span class="text-lg">{item.icon}</span>
+                    {#if !menuCollapsed}
+                      <span class="text-sm font-medium truncate">{item.label}</span>
+                    {/if}
+                  </a>
+                </li>
+              {/if}
+            {/each}
+          </ul>
+        </nav>
+
+        <!-- 底部版权信息 -->
+        <div class="border-t border-[var(--c-border)] px-4 py-3 text-center">
+          {#if !menuCollapsed}
+            <div class="text-xs text-[var(--c-text-secondary)]">
+              @2026-{new Date().getFullYear()} wangcw
+            </div>
+          {:else}
+            <div class="text-xs text-[var(--c-text-secondary)]">
+              @{(new Date().getFullYear())} wangcw
+            </div>
+          {/if}
+        </div>
       </aside>
     </div>
   </div>
