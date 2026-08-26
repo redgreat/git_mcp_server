@@ -16,7 +16,8 @@ STEPS = [
     ("2. 数据库 Schema", ["test_db.py"]),
     ("3. 认证服务", ["test_auth.py"]),
     ("4. Git 操作", ["test_git_ops.py"]),
-    ("5. API 集成测试", ["test_api.py"]),
+    ("5. MCP 协议", ["test_mcp_protocol.py"]),
+    ("6. API 集成测试", ["test_api.py"]),
 ]
 
 def run_test(script):

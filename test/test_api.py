@@ -206,9 +206,9 @@ class APITester:
             })
             data = self.assert_ok(resp, "POST /mcp/query (tools/list)")
             if data and "result" in data:
-                tools = data["result"]
-                print(f"   MCP 工具数: {len(tools) if isinstance(tools, list) else '?'}")
-                if isinstance(tools, list):
+                tools = data["result"].get("tools", [])
+                print(f"   MCP 工具数: {len(tools)}")
+                if tools:
                     for t in tools:
                         print(f"     - {t.get('name', '?')}")
 

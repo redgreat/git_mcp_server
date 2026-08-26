@@ -2,7 +2,7 @@
 git_mcp_server 服务入口
 """
 from fastapi import FastAPI, Request, Header, HTTPException, Query
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import create_engine, select, insert, update, Table, MetaData
 from sqlalchemy.orm import Session
@@ -35,6 +35,31 @@ _sse_sessions: dict = {}
 
 def _get_config() -> Config:
     return Config.load()
+
+
+def _get_mcp_base_url(request: Request, cfg: Config) -> str:
+    """生成客户端可访问的 MCP 基础地址，兼容反向代理终止 HTTPS。"""
+    configured_url = (cfg.server.public_base_url or "").strip().rstrip("/")
+    if configured_url:
+        return configured_url
+
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
+    forwarded_host = request.headers.get("x-forwarded-host", "").split(",", 1)[0].strip()
+    scheme = forwarded_proto or request.url.scheme
+    host = forwarded_host or request.headers.get("host") or request.url.netloc
+    return f"{scheme}://{host}".rstrip("/")
+
+
+def _to_mcp_tool_result(result) -> dict:
+    """把内部工具结果转换为 MCP tools/call 标准内容格式。"""
+    if isinstance(result, dict) and isinstance(result.get("content"), list):
+        return result
+    return {
+        "content": [{
+            "type": "text",
+            "text": json.dumps(result, ensure_ascii=False, default=str),
+        }]
+    }
 
 
 # ---- 应用生命周期 ----
@@ -97,6 +122,8 @@ def create_app() -> FastAPI:
     # ---- MCP SSE 端点 ----
 
     @app.post("/mcp/query")
+    @app.post("/mcp/message")
+    @app.post("/mcp/sse")
     async def mcp_query(request: Request, x_access_key: str = Header(None, alias="X-Access-Key"),
                         session_id: str = Query(None)):
         """MCP JSON-RPC 查询端点"""
@@ -106,7 +133,10 @@ def create_app() -> FastAPI:
         req_id = body.get("id")
 
         # 验证 access key
+        session = _sse_sessions.get(session_id) if session_id else None
         access_key = x_access_key or body.get("access_key")
+        if not access_key and session:
+            access_key = session["access_key"]
         if not access_key:
             return JSONResponse({
                 "jsonrpc": "2.0", "id": req_id,
@@ -131,22 +161,37 @@ def create_app() -> FastAPI:
         response_dict = None
         try:
             if method == "initialize":
+                client_protocol_version = params.get("protocolVersion", "2024-11-05")
                 result = {
-                    "protocolVersion": "2024-11-05",
+                    "protocolVersion": client_protocol_version,
                     "capabilities": {"tools": {}},
                     "serverInfo": {
                         "name": "git-mcp-server",
                         "version": "1.0.0"
                     }
                 }
-            elif method == "initialized":
+            elif method in ("initialized", "notifications/initialized"):
+                result = None
+            elif method in ("ping", "notifications/ping"):
                 result = {}
+            elif method == "resources/list":
+                result = {"resources": []}
+            elif method == "resources/templates/list":
+                result = {"resourceTemplates": []}
+            elif method == "prompts/list":
+                result = {"prompts": []}
+            elif method == "roots/list":
+                result = {"roots": []}
+            elif method.startswith("notifications/"):
+                result = None
             elif method == "tools/list":
-                result = [t.to_dict() for t in MCP_TOOLS]
+                result = {"tools": [t.to_dict() for t in MCP_TOOLS]}
             elif method == "tools/call":
-                result = await _handle_mcp_tool(
-                    engine, cfg, access_key, params.get("name"),
-                    params.get("arguments", {}), client_ip
+                result = _to_mcp_tool_result(
+                    await _handle_mcp_tool(
+                        engine, cfg, access_key, params.get("name"),
+                        params.get("arguments", {}), client_ip
+                    )
                 )
             else:
                 return JSONResponse({
@@ -167,9 +212,13 @@ def create_app() -> FastAPI:
             }
 
         # SSE 传输模式下，通过流返回响应
-        if session_id and session_id in _sse_sessions:
-            await _sse_sessions[session_id].put(response_dict)
-            return JSONResponse({"ok": True})
+        # MCP 通知没有 id，不需要 JSON-RPC 响应。
+        if req_id is None:
+            return Response(status_code=202)
+
+        if session:
+            await session["queue"].put(response_dict)
+            return JSONResponse(response_dict)
 
         return JSONResponse(response_dict)
 
@@ -191,9 +240,13 @@ def create_app() -> FastAPI:
 
         session_id = uuid.uuid4().hex
         queue = asyncio.Queue()
-        _sse_sessions[session_id] = queue
+        _sse_sessions[session_id] = {
+            "queue": queue,
+            "access_key": access_key,
+        }
 
-        endpoint_url = f"{request.url.scheme}://{request.url.netloc}/mcp/query?session_id={session_id}"
+        base_url = _get_mcp_base_url(request, cfg)
+        endpoint_url = f"{base_url}/mcp/message?session_id={session_id}"
 
         async def event_stream():
             try:
@@ -208,7 +261,20 @@ def create_app() -> FastAPI:
             finally:
                 _sse_sessions.pop(session_id, None)
 
-        return StreamingResponse(event_stream(), media_type="text/event-stream")
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.head("/mcp/sse")
+    async def mcp_sse_head():
+        """兼容客户端建立 SSE 连接前的 HEAD 探测。"""
+        return Response(status_code=200)
 
     # ---- 前端 SPA 回退 ----
 
