@@ -7,6 +7,7 @@
   let error = $state('');
   let loading = $state(false);
   let showPassword = $state(false);
+  let currentYear = $state(new Date().getFullYear());
 
   onMount(() => {
     if (localStorage.getItem('token')) goto('/admin/dashboard');
@@ -182,6 +183,6 @@
 
     </div>
 
-    <p class="mt-6 text-center text-sm text-blue-100/70">@2026-{new Date().getFullYear()} wangcw</p>
+    <p class="mt-6 text-center text-sm text-blue-100/70">@wangcw {currentYear > 2026 ? `2026-${currentYear}` : '2026'}</p>
   </div>
 </div>

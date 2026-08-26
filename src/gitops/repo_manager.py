@@ -7,6 +7,7 @@ import time
 import threading
 from typing import Optional, Dict, List
 from dataclasses import dataclass
+from urllib.parse import quote
 
 from git import Repo, GitCommandError
 try:
@@ -165,14 +166,15 @@ class GitRepoManager:
                 origin.set_url(auth_url)
 
     def _inject_auth(self, url: str, username: str = None, password: str = None) -> str:
-        """将用户名密码注入 HTTPS URL"""
+        """将用户名密码注入 HTTPS URL，对特殊字符进行 URL 编码"""
         if not username or not password:
             return url
         if url.startswith("https://"):
-            # https://user:pass@host/path
             prefix = "https://"
             rest = url[len(prefix):]
-            return f"{prefix}{username}:{password}@{rest}"
+            encoded_username = quote(username, safe='')
+            encoded_password = quote(password, safe='')
+            return f"{prefix}{encoded_username}:{encoded_password}@{rest}"
         return url
 
     def force_fetch(self, repo_id: int, username: str = None, password: str = None):

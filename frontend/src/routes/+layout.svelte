@@ -351,7 +351,7 @@
         <div class="border-t border-[var(--c-border)] py-3 text-center">
           {#if !menuCollapsed}
             <div class="px-4 text-xs text-[var(--c-text-secondary)]">
-              @2026-{new Date().getFullYear()} wangcw
+              @wangcw {(new Date().getFullYear()) > 2026 ? `2026-${new Date().getFullYear()}` : '2026'}
             </div>
           {:else}
             <div class="text-xs text-[var(--c-text-secondary)]">
