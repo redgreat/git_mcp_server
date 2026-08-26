@@ -1,8 +1,8 @@
 """
 git_mcp_server 服务入口
 """
-from fastapi import FastAPI, Request, Header, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
+from fastapi import FastAPI, Request, Header, HTTPException, Query
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import create_engine, select, insert, update, Table, MetaData
 from sqlalchemy.orm import Session
@@ -10,6 +10,9 @@ from contextlib import asynccontextmanager
 import os
 import time
 import threading
+import asyncio
+import uuid
+import json
 
 from .config import Config
 from .logging_utils import get_logger
@@ -27,6 +30,7 @@ from .security.secret import decrypt_text
 # ---- 全局变量 ----
 _repo_manager: GitRepoManager = None
 _logger = None
+_sse_sessions: dict = {}
 
 
 def _get_config() -> Config:
@@ -93,7 +97,8 @@ def create_app() -> FastAPI:
     # ---- MCP SSE 端点 ----
 
     @app.post("/mcp/query")
-    async def mcp_query(request: Request, x_access_key: str = Header(None, alias="X-Access-Key")):
+    async def mcp_query(request: Request, x_access_key: str = Header(None, alias="X-Access-Key"),
+                        session_id: str = Query(None)):
         """MCP JSON-RPC 查询端点"""
         body = await request.json()
         method = body.get("method")
@@ -122,9 +127,10 @@ def create_app() -> FastAPI:
                 "error": {"code": -32602, "message": f"IP {client_ip} 不在白名单中"}
             }, status_code=403)
 
+        # 处理消息，统一生成 JSON-RPC 响应
+        response_dict = None
         try:
             if method == "initialize":
-                # MCP 初始化握手
                 result = {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {"tools": {}},
@@ -134,8 +140,7 @@ def create_app() -> FastAPI:
                     }
                 }
             elif method == "initialized":
-                # 客户端通知初始化完成，无需响应
-                return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": {}})
+                result = {}
             elif method == "tools/list":
                 result = [t.to_dict() for t in MCP_TOOLS]
             elif method == "tools/call":
@@ -148,38 +153,60 @@ def create_app() -> FastAPI:
                     "jsonrpc": "2.0", "id": req_id,
                     "error": {"code": -32601, "message": f"未知方法: {method}"}
                 })
-
-            return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": result})
+            response_dict = {"jsonrpc": "2.0", "id": req_id, "result": result}
         except HTTPException as e:
-            return JSONResponse({
+            response_dict = {
                 "jsonrpc": "2.0", "id": req_id,
                 "error": {"code": e.status_code, "message": e.detail}
-            }, status_code=e.status_code)
+            }
         except Exception as e:
             _logger.error(f"MCP 错误: {e}")
-            return JSONResponse({
+            response_dict = {
                 "jsonrpc": "2.0", "id": req_id,
                 "error": {"code": -32603, "message": str(e)}
-            }, status_code=500)
+            }
+
+        # SSE 传输模式下，通过流返回响应
+        if session_id and session_id in _sse_sessions:
+            await _sse_sessions[session_id].put(response_dict)
+            return JSONResponse({"ok": True})
+
+        return JSONResponse(response_dict)
 
     @app.get("/mcp/sse")
     async def mcp_sse(request: Request, x_access_key: str = Header(None, alias="X-Access-Key")):
         """MCP SSE 端点（兼容 IDE 集成）"""
-        from fastapi.responses import StreamingResponse
-        import json
-
         access_key = x_access_key
         if not access_key:
             raise HTTPException(status_code=400, detail="缺少 X-Access-Key")
 
+        # 校验 access key 权限
+        key_info = _get_key_info(engine, access_key)
+        if not key_info:
+            raise HTTPException(status_code=401, detail="无效或已禁用的访问密钥")
+
+        client_ip = get_client_ip(request)
+        if not ip_checker.is_allowed(key_info["id"], client_ip):
+            raise HTTPException(status_code=403, detail=f"IP {client_ip} 不在白名单中")
+
+        session_id = uuid.uuid4().hex
+        queue = asyncio.Queue()
+        _sse_sessions[session_id] = queue
+
+        endpoint_url = f"{request.url.scheme}://{request.url.netloc}/mcp/query?session_id={session_id}"
+
         async def event_stream():
-            # 发送 endpoint 事件，告诉客户端 POST 消息的 URL
-            yield f"event: endpoint\ndata: /mcp/query\n\n"
-            # 保持连接
-            while True:
-                import asyncio
-                await asyncio.sleep(30)
-                yield ": keepalive\n\n"
+            try:
+                # 发送 endpoint 事件，告知客户端消息 POST 地址
+                yield f"event: endpoint\ndata: {endpoint_url}\n\n"
+                while True:
+                    try:
+                        msg = await asyncio.wait_for(queue.get(), timeout=30)
+                        yield f"event: message\ndata: {json.dumps(msg)}\n\n"
+                    except asyncio.TimeoutError:
+                        yield ": keepalive\n\n"
+            finally:
+                _sse_sessions.pop(session_id, None)
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
