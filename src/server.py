@@ -160,12 +160,12 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="缺少 X-Access-Key")
 
         async def event_stream():
-            # 发送工具列表
+            # 发送初始化响应（标准 JSON-RPC 2.0 格式）
             tools_data = [t.to_dict() for t in MCP_TOOLS]
             event = {
                 "jsonrpc": "2.0",
-                "method": "tools/list",
-                "params": tools_data,
+                "id": "init",
+                "result": {"tools": tools_data}
             }
             yield f"data: {json.dumps(event)}\n\n"
             # 保持连接
