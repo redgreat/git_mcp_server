@@ -6,11 +6,11 @@ const config = {
   preprocess: vitePreprocess(),
   kit: {
     adapter: adapter({
-      pages: 'build',
-      assets: 'build',
+      pages: '../src/static',
+      assets: '../src/static',
       fallback: 'index.html',
       precompress: false,
-      strict: true
+      strict: false
     }),
     paths: {
       base: '/admin'

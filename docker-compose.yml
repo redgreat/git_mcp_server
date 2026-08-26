@@ -1,35 +1,14 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: git_mcp_admin
-      POSTGRES_USER: git_mcp_admin
-      POSTGRES_PASSWORD: change_this_password
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    ports:
-      - "5433:5432"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U git_mcp_admin -d git_mcp_admin"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   git_mcp_server:
-    build:
-      context: .
-      dockerfile: DockerfileLocal
-    image: git_mcp_server:latest
+    image: registry.cn-hangzhou.aliyuncs.com/redgreat/git_mcp_server:latest
     container_name: git_mcp_server
+    hostname: git_mcp_server
     init: true
     ports:
       - "3001:3001"
     environment:
       - TZ=Asia/Shanghai
       - CONFIG_PATH=/app/config/config.yml
-      - DB_HOST=postgres
-      - DB_PORT=5432
     volumes:
       - ./config:/app/config:ro
       - ./data/git_repos:/data/git_repos

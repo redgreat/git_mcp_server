@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="gitmcp-g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#4f46e5"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#gitmcp-g)"/>
+  <!-- git branch 图形 -->
+  <g stroke="#ffffff" stroke-width="5" stroke-linecap="round" fill="none">
+    <path d="M20 26v14"/>
+    <path d="M20 33l24 13"/>
+  </g>
+  <circle cx="20" cy="19" r="6" fill="#ffffff"/>
+  <circle cx="20" cy="46" r="6" fill="#ffffff"/>
+  <circle cx="46" cy="46" r="6" fill="#ffffff"/>
+</svg>
