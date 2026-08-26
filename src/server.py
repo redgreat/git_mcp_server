@@ -123,7 +123,20 @@ def create_app() -> FastAPI:
             }, status_code=403)
 
         try:
-            if method == "tools/list":
+            if method == "initialize":
+                # MCP 初始化握手
+                result = {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {
+                        "name": "git-mcp-server",
+                        "version": "1.0.0"
+                    }
+                }
+            elif method == "initialized":
+                # 客户端通知初始化完成，无需响应
+                return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": {}})
+            elif method == "tools/list":
                 result = [t.to_dict() for t in MCP_TOOLS]
             elif method == "tools/call":
                 result = await _handle_mcp_tool(
@@ -160,14 +173,8 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="缺少 X-Access-Key")
 
         async def event_stream():
-            # 发送初始化响应（标准 JSON-RPC 2.0 格式）
-            tools_data = [t.to_dict() for t in MCP_TOOLS]
-            event = {
-                "jsonrpc": "2.0",
-                "id": "init",
-                "result": {"tools": tools_data}
-            }
-            yield f"data: {json.dumps(event)}\n\n"
+            # 发送 endpoint 事件，告诉客户端 POST 消息的 URL
+            yield f"event: endpoint\ndata: /mcp/query\n\n"
             # 保持连接
             while True:
                 import asyncio
