@@ -292,7 +292,7 @@ def build_admin_router(cfg: Config, repo_manager=None):
     def create_key(req: CreateKeyRequest, authorization: str = Header(None),
                    request: Request = None):
         user = _get_user(authorization)
-        ak = req.ak or f"git_mcp_server_{secrets.token_hex(16)}"
+        ak = req.ak or f"git_{secrets.token_hex(16)}"
         with Session(engine) as session:
             result = session.execute(
                 insert(access_keys).values(
@@ -346,6 +346,7 @@ def build_admin_router(cfg: Config, repo_manager=None):
             ).mappings().all()
         return [{"id": r["id"], "name": r["name"], "auth_type": r["auth_type"],
                  "description": r["description"],
+                 "username": decrypt_text(r.get("username_enc") or "", cfg.security.master_key),
                  "has_username": bool(r.get("username_enc")),
                  "has_password": bool(r.get("password_enc")),
                  "has_ssh_key": bool(r.get("ssh_key_enc")),
@@ -591,6 +592,28 @@ def build_admin_router(cfg: Config, repo_manager=None):
                      "access_level": req.access_level},
                     client_ip=get_client_ip(request))
         return {"ok": True, "id": perm_id}
+
+    @router.put("/api/admin/permissions/{perm_id}")
+    def update_permission(perm_id: int, req: GrantPermissionRequest,
+                          authorization: str = Header(None),
+                          request: Request = None):
+        user = _get_user(authorization)
+        vals = {}
+        if req.access_level is not None:
+            vals["access_level"] = req.access_level
+        if req.branch_pattern is not None:
+            vals["branch_pattern"] = req.branch_pattern
+        if req.path_pattern is not None:
+            vals["path_pattern"] = req.path_pattern
+        if vals:
+            with Session(engine) as session:
+                session.execute(
+                    update(git_permissions).where(git_permissions.c.id == perm_id).values(**vals)
+                )
+                session.commit()
+        _log_system(user, "update_permission", "permission", perm_id, vals,
+                    client_ip=get_client_ip(request))
+        return {"ok": True}
 
     @router.delete("/api/admin/permissions/{perm_id}")
     def revoke_permission(perm_id: int, authorization: str = Header(None),

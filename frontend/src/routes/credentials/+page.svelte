@@ -23,13 +23,31 @@
     showForm = true;
   }
 
+  function openEdit(c) {
+    editingId = c.id;
+    form = {
+      name: c.name,
+      auth_type: c.auth_type,
+      username: c.username || '',
+      password: '',
+      ssh_key: '',
+      description: c.description || ''
+    };
+    showForm = true;
+  }
+
   async function save() {
     const method = editingId ? 'PUT' : 'POST';
     const url = editingId ? `/api/admin/credentials/${editingId}` : '/api/admin/credentials';
     const body = { ...form, ssh_key: form.auth_type === 'ssh' ? form.ssh_key : '' };
-    await fetch(url, { method, headers: { 'Content-Type': 'application/json', Authorization: token() }, body: JSON.stringify(body) });
-    showForm = false;
-    await load();
+    const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json', Authorization: token() }, body: JSON.stringify(body) });
+    if (res.ok) {
+      showForm = false;
+      await load();
+    } else {
+      const data = await res.json();
+      alert(data.detail || '保存失败');
+    }
   }
 
   async function remove(id) {
@@ -47,7 +65,7 @@
     <button class={btnPrimaryCls} onclick={openCreate}>+ 添加凭据</button>
   </div>
 
-  <!-- 添加凭据弹窗 -->
+  <!-- 添加/编辑凭据弹窗 -->
   {#if showForm}
     <Modal
       title={editingId ? '编辑凭据' : '添加 Git 凭据'}
@@ -107,11 +125,12 @@
             <tr>
               <td class="font-bold text-[var(--c-text)]">{c.name}</td>
               <td><span class="badge badge-outline badge-sm">{c.auth_type}</span></td>
-              <td><span class="badge {c.has_username ? 'badge-success' : 'badge-ghost'} badge-xs">{c.has_username ? '已设置' : '无'}</span></td>
+              <td class="text-xs text-[var(--c-text-secondary)]">{c.username || '-'}</td>
               <td><span class="badge {c.has_password ? 'badge-success' : 'badge-ghost'} badge-xs">{c.has_password ? '已设置' : '无'}</span></td>
               <td><span class="badge {c.has_ssh_key ? 'badge-success' : 'badge-ghost'} badge-xs">{c.has_ssh_key ? '已设置' : '无'}</span></td>
               <td class="text-xs text-[var(--c-text-secondary)]">{c.description || '-'}</td>
-              <td>
+              <td class="flex gap-1">
+                <button class="btn btn-xs btn-ghost" onclick={() => openEdit(c)}>编辑</button>
                 <button class="btn btn-xs btn-ghost text-error" onclick={() => remove(c.id)}>删除</button>
               </td>
             </tr>
@@ -120,7 +139,7 @@
       </table>
     </div>
     <div class="text-sm text-[var(--c-text-secondary)] mt-2 p-2">
-      ⚠️ 凭据已加密存储，编辑需重新输入密码/Token
+      ⚠️ 凭据已加密存储，编辑时密码/Token 留空则不修改已保存的值
     </div>
   {/if}
 </div>

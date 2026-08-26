@@ -8,6 +8,7 @@
   let repos = $state([]);
   let loading = $state(true);
   let showForm = $state(false);
+  let editingId = $state(null);
   let form = $state({ key_id: null, repo_id: null, access_level: 'read_only', branch_pattern: '.*', path_pattern: '.*' });
 
   const token = () => localStorage.getItem('token') || '';
@@ -25,17 +26,52 @@
   }
 
   function openGrant() {
+    editingId = null;
     form = { key_id: null, repo_id: null, access_level: 'read_only', branch_pattern: '.*', path_pattern: '.*' };
     showForm = true;
   }
 
-  async function grant() {
-    await fetch('/api/admin/permissions', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: token() },
-      body: JSON.stringify(form)
-    });
-    showForm = false;
-    await load();
+  function openEdit(p) {
+    editingId = p.id;
+    form = {
+      key_id: p.key_id,
+      repo_id: p.repo_id,
+      access_level: p.access_level,
+      branch_pattern: p.branch_pattern,
+      path_pattern: p.path_pattern
+    };
+    showForm = true;
+  }
+
+  async function save() {
+    if (!form.key_id || !form.repo_id) return;
+    let res;
+    if (editingId) {
+      res = await fetch(`/api/admin/permissions/${editingId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: token() },
+        body: JSON.stringify({
+          key_id: form.key_id,
+          repo_id: form.repo_id,
+          access_level: form.access_level,
+          branch_pattern: form.branch_pattern,
+          path_pattern: form.path_pattern
+        })
+      });
+    } else {
+      res = await fetch('/api/admin/permissions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: token() },
+        body: JSON.stringify(form)
+      });
+    }
+    if (res.ok) {
+      showForm = false;
+      await load();
+    } else {
+      const data = await res.json();
+      alert(data.detail || '保存失败');
+    }
   }
 
   async function revoke(id) {
@@ -62,16 +98,16 @@
     <button class={btnPrimaryCls} onclick={openGrant}>+ 授权仓库</button>
   </div>
 
-  <!-- 授权弹窗 -->
+  <!-- 授权/编辑弹窗 -->
   {#if showForm}
     <Modal
-      title="授权 Key 访问仓库"
+      title={editingId ? '编辑权限' : '授权 Key 访问仓库'}
       subtitle="按仓库 + 分支 + 路径正则精确控制访问范围"
       width="max-w-md"
       onClose={() => (showForm = false)}
     >
       <FormField label="Access Key" required>
-        <select class={selectCls} bind:value={form.key_id}>
+        <select class={selectCls} bind:value={form.key_id} disabled={editingId}>
           <option value={null}>-- 选择 Key --</option>
           {#each keys.filter(k => k.enabled) as k}
             <option value={k.id}>{k.ak.slice(0, 20)}... {k.description}</option>
@@ -79,7 +115,7 @@
         </select>
       </FormField>
       <FormField label="Git 仓库" required>
-        <select class={selectCls} bind:value={form.repo_id}>
+        <select class={selectCls} bind:value={form.repo_id} disabled={editingId}>
           <option value={null}>-- 选择仓库 --</option>
           {#each repos.filter(r => r.enabled) as r}
             <option value={r.id}>{r.name}</option>
@@ -103,7 +139,7 @@
       </div>
       {#snippet footer()}
         <button class={btnGhostCls} onclick={() => (showForm = false)}>取消</button>
-        <button class={btnPrimaryCls} onclick={grant} disabled={!form.key_id || !form.repo_id}>授权</button>
+        <button class={btnPrimaryCls} onclick={save} disabled={!form.key_id || !form.repo_id}>保存</button>
       {/snippet}
     </Modal>
   {/if}
@@ -135,7 +171,8 @@
               </td>
               <td><code class="text-xs bg-[var(--c-page-bg)] px-1 rounded text-[var(--c-text)]">{p.branch_pattern}</code></td>
               <td><code class="text-xs bg-[var(--c-page-bg)] px-1 rounded max-w-32 truncate block text-[var(--c-text)]">{p.path_pattern}</code></td>
-              <td>
+              <td class="flex gap-1">
+                <button class="btn btn-xs btn-ghost" onclick={() => openEdit(p)}>编辑</button>
                 <button class="btn btn-xs btn-ghost text-error" onclick={() => revoke(p.id)}>撤销</button>
               </td>
             </tr>
