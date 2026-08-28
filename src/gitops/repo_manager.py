@@ -3,9 +3,11 @@ Git 仓库管理器 - 管理本地 bare repo 缓存
 """
 import os
 import re
+import stat
+import tempfile
 import time
 import threading
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 from dataclasses import dataclass
 from urllib.parse import quote
 
@@ -114,23 +116,43 @@ class GitRepoManager:
 
         使用浅克隆 (depth=1) 加速首次拉取，不带 blob:none 过滤，
         确保文件内容一并下载，MCP 工具可直接读取。
+        凭据通过 GIT_ASKPASS 机制传递，避免特殊字符导致 URL 解析失败。
         """
-        auth_url = self._inject_auth(url, username, password)
+        askpass_path = None
+        old_env = {}
         try:
-            repo = Repo.clone_from(
-                auth_url, path,
-                bare=True,
-                depth=1,  # 浅克隆，加速首次拉取
-            )
-            return repo
-        except GitCommandError as e:
-            # 如果浅克隆失败（老 Git），尝试完整 clone
-            self.logger.warning(f"浅克隆失败，尝试完整克隆: {e}")
+            # 如果有凭据，设置 ASKPASS 环境变量
+            if username and password:
+                askpass_path, askpass_env = self._create_askpass(username, password)
+                for k, v in askpass_env.items():
+                    old_env[k] = os.environ.get(k)
+                    os.environ[k] = v
+
+            # 使用不带凭据的 URL（凭据由 ASKPASS 提供）
             try:
-                repo = Repo.clone_from(auth_url, path, bare=True)
+                repo = Repo.clone_from(
+                    url, path,
+                    bare=True,
+                    depth=1,  # 浅克隆，加速首次拉取
+                )
                 return repo
-            except GitCommandError as e2:
-                raise RuntimeError(f"克隆仓库失败: {e2}")
+            except GitCommandError as e:
+                # 如果浅克隆失败（老 Git），尝试完整 clone
+                self.logger.warning(f"浅克隆失败，尝试完整克隆: {e}")
+                try:
+                    repo = Repo.clone_from(url, path, bare=True)
+                    return repo
+                except GitCommandError as e2:
+                    raise RuntimeError(f"克隆仓库失败: {e2}")
+        finally:
+            # 恢复环境变量
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            # 清理临时脚本
+            self._cleanup_askpass(askpass_path)
 
     def _do_fetch(self, info: RepoInfo, username: str = None, password: str = None):
         """执行 fetch 更新"""
@@ -140,12 +162,25 @@ class GitRepoManager:
 
     def _do_fetch_raw(self, repo: Repo, bare_path: str,
                       username: str = None, password: str = None):
-        """执行底层 fetch"""
+        """执行底层 fetch
+
+        凭据通过 GIT_ASKPASS 机制传递，避免特殊字符导致 URL 解析失败。
+        """
+        askpass_path = None
+        old_env = {}
         try:
-            # 获取所有 remote
+            # 如果有凭据，设置 ASKPASS 环境变量
+            if username and password:
+                askpass_path, askpass_env = self._create_askpass(username, password)
+                for k, v in askpass_env.items():
+                    old_env[k] = os.environ.get(k)
+                    os.environ[k] = v
+
+            # 获取所有 remote，使用不带凭据的 URL
             for remote in repo.remotes:
-                auth_url = self._inject_auth(remote.url, username, password)
-                remote.set_url(auth_url)
+                # 去除 URL 中的凭据部分（如果有），改用 ASKPASS
+                clean_url = self._strip_auth_from_url(remote.url)
+                remote.set_url(clean_url)
                 # 浅克隆 (depth=1) 可能缺失 fetch refspec，补齐后 fetch 才能找到引用
                 try:
                     has_refspec = bool(repo.git.config('--get', f'remote.{remote.name}.fetch'))
@@ -165,18 +200,86 @@ class GitRepoManager:
                 self.logger.info(f"  {f.ref}: {f.old_commit} -> {f.commit} ({change})")
         except GitCommandError as e:
             self.logger.error(f"Fetch 失败 {bare_path}: {e}")
+        finally:
+            # 恢复环境变量
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            # 清理临时脚本
+            self._cleanup_askpass(askpass_path)
 
     def _update_remote(self, repo: Repo, url: str,
                        username: str = None, password: str = None):
-        """更新 remote URL"""
-        auth_url = self._inject_auth(url, username, password)
+        """更新 remote URL（不带凭据，凭据由 ASKPASS 提供）"""
+        clean_url = self._strip_auth_from_url(url)
         if repo.remotes:
             origin = repo.remotes.origin
-            if origin.url != auth_url:
-                origin.set_url(auth_url)
+            if origin.url != clean_url:
+                origin.set_url(clean_url)
+
+    @staticmethod
+    def _strip_auth_from_url(url: str) -> str:
+        """去除 URL 中的 user:pass@ 部分"""
+        if '@' in url and '://' in url:
+            prefix, rest = url.split('://', 1)
+            if '@' in rest:
+                _, host_part = rest.rsplit('@', 1)
+                return f"{prefix}://{host_part}"
+        return url
+
+    def _create_askpass(self, username: str, password: str) -> Tuple[str, dict]:
+        """创建 GIT_ASKPASS 脚本，避免凭据嵌入 URL 导致特殊字符解析失败
+
+        Returns:
+            (askpass_script_path, env_dict)
+        """
+        fd, askpass_path = tempfile.mkstemp(suffix='.sh', prefix='git-askpass-')
+        try:
+            # ASKPASS 脚本：根据提示返回用户名或密码
+            script = (
+                '#!/bin/sh\n'
+                'if echo "$1" | grep -qi "Username"; then\n'
+                f'  echo "{username}"\n'
+                'else\n'
+                f'  echo "{password}"\n'
+                'fi\n'
+            )
+            with os.fdopen(fd, 'w') as f:
+                f.write(script)
+            os.chmod(askpass_path, stat.S_IRWXU)
+
+            env = {
+                'GIT_ASKPASS': askpass_path,
+                'GIT_TERMINAL_PROMPT': '0',  # 禁用交互式提示
+                'SSH_ASKPASS': askpass_path,
+            }
+            self.logger.info(f"创建 ASKPASS 脚本: {askpass_path}")
+            return askpass_path, env
+        except Exception:
+            # 创建失败时清理临时文件
+            try:
+                os.unlink(askpass_path)
+            except OSError:
+                pass
+            raise
+
+    def _cleanup_askpass(self, askpass_path: str):
+        """清理临时 ASKPASS 脚本"""
+        if askpass_path and os.path.exists(askpass_path):
+            try:
+                os.unlink(askpass_path)
+                self.logger.info(f"清理 ASKPASS 脚本: {askpass_path}")
+            except OSError:
+                pass
 
     def _inject_auth(self, url: str, username: str = None, password: str = None) -> str:
-        """将用户名密码注入 HTTPS URL，对特殊字符进行 URL 编码"""
+        """将用户名密码注入 HTTPS URL，对特殊字符进行 URL 编码
+
+        注意：当用户名包含 @ 等字符时，URL 编码可能导致 libcurl 解析失败。
+        此时应使用 _create_askpass() 代替此方法。
+        """
         if not username or not password:
             return url
         if url.startswith("https://"):
@@ -203,47 +306,68 @@ class GitRepoManager:
                 "details": [{"ref": str, "old_commit": str, "new_commit": str, "change_type": str}]
             }
         """
-        with self._lock:
-            info = self._cache.get(repo_id)
-            if not info:
-                return {"fetched": 0, "updated": 0, "error": "仓库尚未克隆，请先通过 MCP 工具访问一次", "details": []}
-            try:
-                repo = Repo(info.bare_path)
-                for remote in repo.remotes:
-                    auth_url = self._inject_auth(remote.url, username, password)
-                    remote.set_url(auth_url)
-                    # 浅克隆 (depth=1) 可能缺失 fetch refspec，补齐后 fetch 才能找到引用
-                    try:
-                        has_refspec = bool(repo.git.config('--get', f'remote.{remote.name}.fetch'))
-                    except GitCommandError:
-                        has_refspec = False
-                    if not has_refspec:
-                        repo.git.config('--replace-all', f'remote.{remote.name}.fetch',
-                                        '+refs/heads/*:refs/remotes/origin/*')
-                fetched = repo.remotes.origin.fetch(prune=True, tags=True)
-                info.last_fetch = time.time()
-                updated = [
-                    f for f in fetched
-                    if f.flags & (f.FAST_FORWARD | f.NEW_HEAD | f.FORCED_UPDATE)
-                ]
-                # 构建详细的更新信息
-                details = []
-                for f in updated:
-                    change_type = "new" if f.flags & f.NEW_HEAD else ("fast-forward" if f.flags & f.FAST_FORWARD else "forced-update")
-                    details.append({
-                        "ref": f.ref,
-                        "old_commit": str(f.old_commit.hexsha)[:8] if f.old_commit else None,
-                        "new_commit": str(f.commit.hexsha)[:8] if f.commit else None,
-                        "change_type": change_type,
-                    })
-                self.logger.info(f"手动拉取完成: {info.repo_name}, {len(fetched)} refs, {len(updated)} 更新")
-                if details:
-                    for d in details:
-                        self.logger.info(f"  {d['ref']}: {d['old_commit']} -> {d['new_commit']} ({d['change_type']})")
-                return {"fetched": len(fetched), "updated": len(updated), "error": None, "details": details}
-            except GitCommandError as e:
-                self.logger.error(f"手动拉取失败 {info.bare_path}: {e}")
-                return {"fetched": 0, "updated": 0, "error": str(e), "details": []}
+        askpass_path = None
+        old_env = {}
+        try:
+            with self._lock:
+                info = self._cache.get(repo_id)
+                if not info:
+                    return {"fetched": 0, "updated": 0, "error": "仓库尚未克隆，请先通过 MCP 工具访问一次", "details": []}
+
+                # 如果有凭据，设置 ASKPASS 环境变量
+                if username and password:
+                    askpass_path, askpass_env = self._create_askpass(username, password)
+                    for k, v in askpass_env.items():
+                        old_env[k] = os.environ.get(k)
+                        os.environ[k] = v
+
+                try:
+                    repo = Repo(info.bare_path)
+                    for remote in repo.remotes:
+                        # 去除 URL 中的凭据部分，改用 ASKPASS
+                        clean_url = self._strip_auth_from_url(remote.url)
+                        remote.set_url(clean_url)
+                        # 浅克隆 (depth=1) 可能缺失 fetch refspec，补齐后 fetch 才能找到引用
+                        try:
+                            has_refspec = bool(repo.git.config('--get', f'remote.{remote.name}.fetch'))
+                        except GitCommandError:
+                            has_refspec = False
+                        if not has_refspec:
+                            repo.git.config('--replace-all', f'remote.{remote.name}.fetch',
+                                            '+refs/heads/*:refs/remotes/origin/*')
+                    fetched = repo.remotes.origin.fetch(prune=True, tags=True)
+                    info.last_fetch = time.time()
+                    updated = [
+                        f for f in fetched
+                        if f.flags & (f.FAST_FORWARD | f.NEW_HEAD | f.FORCED_UPDATE)
+                    ]
+                    # 构建详细的更新信息
+                    details = []
+                    for f in updated:
+                        change_type = "new" if f.flags & f.NEW_HEAD else ("fast-forward" if f.flags & f.FAST_FORWARD else "forced-update")
+                        details.append({
+                            "ref": f.ref,
+                            "old_commit": str(f.old_commit.hexsha)[:8] if f.old_commit else None,
+                            "new_commit": str(f.commit.hexsha)[:8] if f.commit else None,
+                            "change_type": change_type,
+                        })
+                    self.logger.info(f"手动拉取完成: {info.repo_name}, {len(fetched)} refs, {len(updated)} 更新")
+                    if details:
+                        for d in details:
+                            self.logger.info(f"  {d['ref']}: {d['old_commit']} -> {d['new_commit']} ({d['change_type']})")
+                    return {"fetched": len(fetched), "updated": len(updated), "error": None, "details": details}
+                except GitCommandError as e:
+                    self.logger.error(f"手动拉取失败 {info.bare_path}: {e}")
+                    return {"fetched": 0, "updated": 0, "error": str(e), "details": []}
+        finally:
+            # 恢复环境变量
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            # 清理临时脚本
+            self._cleanup_askpass(askpass_path)
 
     def remove_repo(self, repo_id: int):
         """从缓存中移除仓库（不删除磁盘文件）"""
