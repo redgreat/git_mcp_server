@@ -360,9 +360,6 @@ async def _handle_mcp_tool(engine, cfg: Config, access_key: str,
 
     perm_checker = MCPPermissionChecker(engine)
 
-    if repo_id:
-        _logger.info(f"MCP 工具调用: {tool_name}, repo_id={repo_id}, access_key={access_key[:8]}...")
-
     t0 = time.time()
     result = None
     status = "success"
@@ -370,6 +367,9 @@ async def _handle_mcp_tool(engine, cfg: Config, access_key: str,
     repo_id = arguments.get("repo_id")
     repo_name = None
     target = None
+
+    if repo_id:
+        _logger.info(f"MCP 工具调用: {tool_name}, repo_id={repo_id}, access_key={access_key[:8]}...")
 
     try:
         if tool_name == "list_repos":
