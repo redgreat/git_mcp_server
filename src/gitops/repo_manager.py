@@ -50,7 +50,57 @@ class GitRepoManager:
         self.logger = get_logger("git_repo_manager", "logs")
 
         os.makedirs(self.base_dir, exist_ok=True)
+        # 将仓库基目录加入 Git safe.directory，避免 dubious ownership 错误
+        self._ensure_safe_directory(self.base_dir)
         self._start_cleanup_loop()
+
+    _safe_directory_tmpcfg = None  # 类级别的临时配置文件路径，避免重复创建
+
+    @classmethod
+    def _ensure_safe_directory(cls, path: str):
+        """将目录加入 Git safe.directory 配置，防止 dubious ownership 错误
+
+        依次尝试：
+        1. git config --global --add（常规情况）
+        2. git config --system --add（Docker 容器中 $HOME 不可写时）
+        3. GIT_CONFIG_GLOBAL 临时文件（以上都失败时，所有仓库共用一个临时文件）
+        """
+        import subprocess
+        try:
+            # 尝试 1: 全局配置
+            result = subprocess.run(
+                ['git', 'config', '--global', '--add', 'safe.directory', path],
+                capture_output=True, timeout=10
+            )
+            if result.returncode == 0:
+                return
+
+            # 尝试 2: 系统配置
+            result = subprocess.run(
+                ['git', 'config', '--system', '--add', 'safe.directory', path],
+                capture_output=True, timeout=10
+            )
+            if result.returncode == 0:
+                return
+
+            # 尝试 3: 临时全局配置文件（复用已有的临时文件）
+            if cls._safe_directory_tmpcfg and os.path.exists(cls._safe_directory_tmpcfg):
+                tmp_path = cls._safe_directory_tmpcfg
+            else:
+                fd, tmp_path = tempfile.mkstemp(suffix='.gitconfig', prefix='git-safe-')
+                os.close(fd)
+                cls._safe_directory_tmpcfg = tmp_path
+
+            try:
+                subprocess.run(
+                    ['git', 'config', '--file', tmp_path, '--add', 'safe.directory', path],
+                    capture_output=True, timeout=10
+                )
+                os.environ['GIT_CONFIG_GLOBAL'] = tmp_path
+            except Exception:
+                pass
+        except Exception:
+            pass  # 忽略错误（如 git 不存在等）
 
     def _repo_path(self, repo_name: str) -> str:
         """获取仓库的本地存储路径"""
@@ -91,6 +141,8 @@ class GitRepoManager:
             # 首次 clone 或重新加载
             if os.path.exists(bare_path):
                 self.logger.info(f"加载已有仓库: {repo_name} at {bare_path}")
+                # 确保已有仓库也在 safe.directory 中
+                self._ensure_safe_directory(bare_path)
                 repo = Repo(bare_path)
                 # 更新 remote URL
                 self._update_remote(repo, repo_url, username, password)
@@ -135,6 +187,8 @@ class GitRepoManager:
                     bare=True,
                     depth=1,  # 浅克隆，加速首次拉取
                 )
+                # 克隆后立即加入 safe.directory，防止 dubious ownership
+                self._ensure_safe_directory(path)
                 return repo
             except GitCommandError as e:
                 # 如果浅克隆失败（老 Git），尝试完整 clone
