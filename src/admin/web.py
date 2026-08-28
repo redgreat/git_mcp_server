@@ -519,10 +519,12 @@ def build_admin_router(cfg: Config, repo_manager=None):
                 if result["error"]:
                     raise HTTPException(status_code=500, detail=f"拉取失败: {result['error']}")
                 message = f"拉取完成：{result['fetched']} 个引用，{result['updated']} 个有更新"
+                details = result.get("details", [])
             else:
                 # 未缓存：触发首次克隆（等价于拉到最新）
                 repo_manager.get_repo(repo_id, repo_name, repo_url, username, password)
                 message = "首次克隆完成，已获取最新代码"
+                details = []
         except HTTPException:
             raise
         except Exception as e:
@@ -537,7 +539,7 @@ def build_admin_router(cfg: Config, repo_manager=None):
 
         _log_system(user, "fetch_repo", "repo", repo_id,
                     {"name": repo_name}, client_ip=get_client_ip(request))
-        return {"ok": True, "message": message}
+        return {"ok": True, "message": message, "details": details}
 
     # ========== 权限分配 ==========
 

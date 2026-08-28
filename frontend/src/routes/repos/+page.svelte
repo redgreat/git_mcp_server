@@ -25,15 +25,21 @@
   async function fetchRepo(r) {
     if (fetchingId) return;
     fetchingId = r.id;
+    console.log(`[拉取] 开始拉取仓库: ${r.name} (ID: ${r.id})`);
     try {
       const res = await fetch(`/api/admin/repos/${r.id}/fetch`, {
         method: 'POST', headers: { Authorization: token() }
       });
       const data = await res.json();
+      console.log(`[拉取] 服务器响应 (HTTP ${res.status}):`, data);
       if (!res.ok) throw new Error(data.detail || '拉取失败');
       showToast('success', `✅ ${r.name}：${data.message}`);
+      if (data.details) {
+        console.log(`[拉取] 更新详情:`, data.details);
+      }
       await load(); // 刷新 last_fetched_at
     } catch (e) {
+      console.error(`[拉取] 失败:`, e);
       showToast('error', `❌ ${r.name}：${e.message}`);
     } finally {
       fetchingId = null;

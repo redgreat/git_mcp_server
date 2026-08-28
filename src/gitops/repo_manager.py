@@ -81,6 +81,7 @@ class GitRepoManager:
 
                 # 是否需要 fetch
                 if now - info.last_fetch > self.fetch_interval:
+                    self.logger.info(f"自动 fetch: {repo_name} (间隔 {int(now - info.last_fetch)}s)")
                     self._do_fetch(info, username, password)
 
                 return Repo(bare_path)
@@ -93,7 +94,7 @@ class GitRepoManager:
                 self._update_remote(repo, repo_url, username, password)
                 self._do_fetch_raw(repo, bare_path, username, password)
             else:
-                self.logger.info(f"首次克隆仓库: {repo_name} from {repo_url}")
+                self.logger.info(f"首次克隆仓库: {repo_name} from {repo_url} (depth=1)")
                 repo = self._clone_bare(repo_url, bare_path, username, password)
 
             info = RepoInfo(
@@ -109,16 +110,18 @@ class GitRepoManager:
 
     def _clone_bare(self, url: str, path: str,
                     username: str = None, password: str = None) -> Repo:
-        """Clone --bare 到本地"""
+        """Clone --bare 到本地
+
+        使用浅克隆 (depth=1) 加速首次拉取，不带 blob:none 过滤，
+        确保文件内容一并下载，MCP 工具可直接读取。
+        """
         auth_url = self._inject_auth(url, username, password)
         try:
             repo = Repo.clone_from(
                 auth_url, path,
                 bare=True,
-                filter="blob:none",  # 延迟下载 blob，按需获取
-                depth=1,  # 浅克隆
+                depth=1,  # 浅克隆，加速首次拉取
             )
-            # 后续 fetch 可以补齐历史
             return repo
         except GitCommandError as e:
             # 如果浅克隆失败（老 Git），尝试完整 clone
@@ -151,8 +154,15 @@ class GitRepoManager:
                 if not has_refspec:
                     repo.git.config('--replace-all', f'remote.{remote.name}.fetch',
                                     '+refs/heads/*:refs/remotes/origin/*')
-            repo.remotes.origin.fetch(prune=True, tags=True)
-            self.logger.info(f"Fetch 完成: {bare_path}")
+            fetched = repo.remotes.origin.fetch(prune=True, tags=True)
+            updated = [
+                f for f in fetched
+                if f.flags & (f.FAST_FORWARD | f.NEW_HEAD | f.FORCED_UPDATE)
+            ]
+            self.logger.info(f"Fetch 完成: {bare_path}, {len(fetched)} refs, {len(updated)} 更新")
+            for f in updated:
+                change = "new" if f.flags & f.NEW_HEAD else ("fast-forward" if f.flags & f.FAST_FORWARD else "forced-update")
+                self.logger.info(f"  {f.ref}: {f.old_commit} -> {f.commit} ({change})")
         except GitCommandError as e:
             self.logger.error(f"Fetch 失败 {bare_path}: {e}")
 
@@ -188,13 +198,15 @@ class GitRepoManager:
         """强制 fetch 并返回结果统计（供管理后台手动拉取使用）
 
         Returns:
-            {"fetched": int, "updated": int, "error": str|None}
-            fetched: 拉取的引用数；updated: 其中有更新的引用数
+            {
+                "fetched": int, "updated": int, "error": str|None,
+                "details": [{"ref": str, "old_commit": str, "new_commit": str, "change_type": str}]
+            }
         """
         with self._lock:
             info = self._cache.get(repo_id)
             if not info:
-                return {"fetched": 0, "updated": 0, "error": "仓库尚未克隆，请先通过 MCP 工具访问一次"}
+                return {"fetched": 0, "updated": 0, "error": "仓库尚未克隆，请先通过 MCP 工具访问一次", "details": []}
             try:
                 repo = Repo(info.bare_path)
                 for remote in repo.remotes:
@@ -214,11 +226,24 @@ class GitRepoManager:
                     f for f in fetched
                     if f.flags & (f.FAST_FORWARD | f.NEW_HEAD | f.FORCED_UPDATE)
                 ]
+                # 构建详细的更新信息
+                details = []
+                for f in updated:
+                    change_type = "new" if f.flags & f.NEW_HEAD else ("fast-forward" if f.flags & f.FAST_FORWARD else "forced-update")
+                    details.append({
+                        "ref": f.ref,
+                        "old_commit": str(f.old_commit.hexsha)[:8] if f.old_commit else None,
+                        "new_commit": str(f.commit.hexsha)[:8] if f.commit else None,
+                        "change_type": change_type,
+                    })
                 self.logger.info(f"手动拉取完成: {info.repo_name}, {len(fetched)} refs, {len(updated)} 更新")
-                return {"fetched": len(fetched), "updated": len(updated), "error": None}
+                if details:
+                    for d in details:
+                        self.logger.info(f"  {d['ref']}: {d['old_commit']} -> {d['new_commit']} ({d['change_type']})")
+                return {"fetched": len(fetched), "updated": len(updated), "error": None, "details": details}
             except GitCommandError as e:
                 self.logger.error(f"手动拉取失败 {info.bare_path}: {e}")
-                return {"fetched": 0, "updated": 0, "error": str(e)}
+                return {"fetched": 0, "updated": 0, "error": str(e), "details": []}
 
     def remove_repo(self, repo_id: int):
         """从缓存中移除仓库（不删除磁盘文件）"""

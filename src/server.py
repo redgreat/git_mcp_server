@@ -360,6 +360,9 @@ async def _handle_mcp_tool(engine, cfg: Config, access_key: str,
 
     perm_checker = MCPPermissionChecker(engine)
 
+    if repo_id:
+        _logger.info(f"MCP 工具调用: {tool_name}, repo_id={repo_id}, access_key={access_key[:8]}...")
+
     t0 = time.time()
     result = None
     status = "success"
@@ -577,6 +580,8 @@ async def _handle_list_tree(engine, cfg: Config, repo_id: int,
         ref=arguments.get("ref", "HEAD"),
         recursive=arguments.get("recursive", True),
     )
+    _logger.info(f"列出目录: repo={repo_info['name']}, path={arguments.get('path', '/')}, "
+                 f"ref={arguments.get('ref', 'HEAD')}, items={len(items)}")
     return {"tree": items}
 
 
@@ -587,13 +592,17 @@ async def _handle_read_file(engine, cfg: Config, repo_id: int,
     username, password = _get_repo_credential(engine, repo_id)
     repo = _repo_manager.get_repo(repo_id, repo_info["name"],
                                    repo_info["url"], username, password)
-    return git_ops.read_file(
+    result = git_ops.read_file(
         repo,
         path=arguments["path"],
         ref=arguments.get("ref", "HEAD"),
         start_line=arguments.get("start_line"),
         end_line=arguments.get("end_line"),
     )
+    _logger.info(f"读取文件: repo={repo_info['name']}, path={arguments['path']}, "
+                 f"ref={arguments.get('ref', 'HEAD')}, size={result.get('size', 0)} bytes, "
+                 f"lines={result.get('total_lines', 0)}")
+    return result
 
 
 async def _handle_git_log(engine, cfg: Config, repo_id: int,

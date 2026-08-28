@@ -77,7 +77,13 @@ def read_file(repo: Repo, path: str, ref: str = "HEAD",
         commit = repo.commit(ref)
         blob = commit.tree / path
 
-        content = blob.data_stream.read().decode("utf-8", errors="replace")
+        try:
+            content = blob.data_stream.read().decode("utf-8", errors="replace")
+        except Exception as e:
+            raise RuntimeError(
+                f"读取文件内容失败: {path} @ {ref}。如果仓库使用浅克隆(shallow clone)或 blob:none 过滤，"
+                f"文件内容可能未下载。请尝试在管理后台手动拉取仓库，或检查 Git 服务器是否支持按需获取 blob。原始错误: {e}"
+            )
         total_lines = content.count("\n") + 1
 
         # 行号过滤
