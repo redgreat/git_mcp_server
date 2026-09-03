@@ -37,7 +37,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY . .
 
 # 复制前端编译结果到 src/static (覆盖源码中可能存在的旧文件)
-COPY --from=frontend-builder /app/frontend/build ./src/static
+COPY --from=frontend-builder /app/src/static ./src/static
 
 # 创建必要的目录
 RUN mkdir -p /data/git_repos /app/logs

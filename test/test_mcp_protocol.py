@@ -8,6 +8,7 @@ from starlette.requests import Request
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.server import _get_mcp_base_url, _to_mcp_tool_result
+from src.gitops.repo_manager import GitRepoManager
 
 
 def _request(headers):
@@ -45,6 +46,17 @@ def test_tool_result_uses_mcp_content_shape():
     result = _to_mcp_tool_result({"repos": [{"id": 1, "name": "demo"}]})
     assert result["content"][0]["type"] == "text"
     assert '"repos"' in result["content"][0]["text"]
+
+
+def test_repo_ref_fixup_accepts_local_heads(tmp_path):
+    from git import Repo
+
+    repo = Repo.init(tmp_path)
+    (tmp_path / "README.md").write_text("ok", encoding="utf-8")
+    repo.index.add(["README.md"])
+    repo.index.commit("init")
+    GitRepoManager._fixup_refs(repo, str(tmp_path))
+    assert repo.head.commit.hexsha
 
 
 if __name__ == "__main__":

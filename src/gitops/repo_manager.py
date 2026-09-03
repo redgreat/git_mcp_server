@@ -131,8 +131,12 @@ class GitRepoManager:
                 info = self._cache[repo_id]
                 info.last_access = now
 
+                self._ensure_safe_directory(bare_path)
+                repo = Repo(bare_path)
+                self._fixup_refs(repo, bare_path)
+
                 # 是否需要 fetch
-                if now - info.last_fetch > self.fetch_interval:
+                if not list(repo.references) or now - info.last_fetch > self.fetch_interval:
                     self.logger.info(f"自动 fetch: {repo_name} (间隔 {int(now - info.last_fetch)}s)")
                     self._do_fetch(info, username, password)
 
@@ -144,6 +148,8 @@ class GitRepoManager:
                 # 确保已有仓库也在 safe.directory 中
                 self._ensure_safe_directory(bare_path)
                 repo = Repo(bare_path)
+                # 修复 refs（兼容旧版 --bare 克隆的仓库）
+                self._fixup_refs(repo, bare_path)
                 # 更新 remote URL
                 self._update_remote(repo, repo_url, username, password)
                 self._do_fetch_raw(repo, bare_path, username, password)
@@ -164,10 +170,12 @@ class GitRepoManager:
 
     def _clone_bare(self, url: str, path: str,
                     username: str = None, password: str = None) -> Repo:
-        """Clone --bare 到本地
+        """克隆仓库到本地
 
-        使用浅克隆 (depth=1) 加速首次拉取，不带 blob:none 过滤，
-        确保文件内容一并下载，MCP 工具可直接读取。
+        使用浅克隆 (depth=1) + no_checkout 策略：
+        - 下载 commit 历史 + 文件内容（blob），但不检出工作目录
+        - HEAD 正确指向默认分支，远程跟踪分支自动创建
+        - 解决 --bare 克隆导致 HEAD/refs 缺失、工具无法读取的问题
         凭据通过 GIT_ASKPASS 机制传递，避免特殊字符导致 URL 解析失败。
         """
         askpass_path = None
@@ -184,17 +192,21 @@ class GitRepoManager:
             try:
                 repo = Repo.clone_from(
                     url, path,
-                    bare=True,
-                    depth=1,  # 浅克隆，加速首次拉取
+                    no_checkout=True,  # 不检出工作目录，节省空间
+                    depth=1,           # 浅克隆，加速首次拉取
                 )
                 # 克隆后立即加入 safe.directory，防止 dubious ownership
                 self._ensure_safe_directory(path)
+                # 确保 HEAD 指向有效的远程跟踪分支
+                self._fixup_refs(repo, path)
                 return repo
             except GitCommandError as e:
                 # 如果浅克隆失败（老 Git），尝试完整 clone
                 self.logger.warning(f"浅克隆失败，尝试完整克隆: {e}")
                 try:
-                    repo = Repo.clone_from(url, path, bare=True)
+                    repo = Repo.clone_from(url, path, no_checkout=True)
+                    self._ensure_safe_directory(path)
+                    self._fixup_refs(repo, path)
                     return repo
                 except GitCommandError as e2:
                     raise RuntimeError(f"克隆仓库失败: {e2}")
@@ -207,6 +219,49 @@ class GitRepoManager:
                     os.environ[k] = v
             # 清理临时脚本
             self._cleanup_askpass(askpass_path)
+
+    @staticmethod
+    def _fixup_refs(repo: Repo, path: str):
+        """修复克隆后的 refs，确保 HEAD 指向有效的远程跟踪分支"""
+        try:
+            # 查找远程跟踪分支
+            remote_heads = [ref for ref in repo.references
+                           if ref.name.startswith('refs/remotes/origin/')
+                          and not ref.name.endswith('/HEAD')]
+            if not remote_heads and repo.remotes:
+                # 兼容旧的 bare/镜像缓存：远端分支可能直接落在 refs/heads。
+                local_heads = [ref for ref in repo.references if ref.name.startswith('refs/heads/')]
+                if local_heads:
+                    try:
+                        repo.git.symbolic_ref('HEAD', local_heads[0].name)
+                    except GitCommandError:
+                        pass
+                    return
+            if remote_heads:
+                # 设置 HEAD 指向第一个远程跟踪分支
+                default_ref = remote_heads[0]
+                try:
+                    repo.git.symbolic-ref('HEAD', default_ref.name)
+                except GitCommandError:
+                    pass
+                # 同时创建本地分支引用（方便 log/blame 等工具）
+                for ref in remote_heads:
+                    branch_name = ref.name.replace('refs/remotes/origin/', '')
+                    try:
+                        repo.git.update-ref(
+                            f'refs/heads/{branch_name}',
+                            ref.commit.hexsha
+                        )
+                    except GitCommandError:
+                        pass
+            elif not repo.references:
+                # 完全没有任何引用，创建空 HEAD
+                try:
+                    repo.git.symbolic-ref('HEAD', 'refs/heads/main')
+                except GitCommandError:
+                    pass
+        except Exception:
+            pass  # 忽略所有错误，不影响核心功能
 
     def _do_fetch(self, info: RepoInfo, username: str = None, password: str = None):
         """执行 fetch 更新"""
@@ -252,6 +307,8 @@ class GitRepoManager:
             for f in updated:
                 change = "new" if f.flags & f.NEW_HEAD else ("fast-forward" if f.flags & f.FAST_FORWARD else "forced-update")
                 self.logger.info(f"  {f.ref}: {f.old_commit} -> {f.commit} ({change})")
+            # fetch 后修复 refs，确保新分支可被工具访问
+            self._fixup_refs(repo, bare_path)
         except GitCommandError as e:
             self.logger.error(f"Fetch 失败 {bare_path}: {e}")
         finally:

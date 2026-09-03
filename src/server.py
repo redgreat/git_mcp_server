@@ -108,12 +108,9 @@ def create_app() -> FastAPI:
 
     # ---- 通用路由 ----
 
-    @app.get("/", response_class=HTMLResponse)
+    @app.get("/", response_class=RedirectResponse)
     async def root():
-        return """<!DOCTYPE html>
-<html><head><title>Git MCP Server</title></head>
-<body><h1>Git MCP Server</h1><p>Running</p>
-<p><a href="/admin">管理后台</a> | <a href="/docs">API 文档</a></p></body></html>"""
+        return RedirectResponse(url="/admin/login")
 
     @app.get("/health")
     def health():
