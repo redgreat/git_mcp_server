@@ -487,6 +487,10 @@ def _log_audit(engine, audit_logs, access_key: str, client_ip: str,
 
 # ---- 工具处理函数 ----
 
+def _run_git_sync(fn, *args, **kwargs):
+    """将同步 Git 操作放入线程池执行，避免阻塞事件循环"""
+    return asyncio.to_thread(fn, *args, **kwargs)
+
 async def _handle_list_repos(engine, access_key: str, arguments: dict) -> dict:
     """列出当前 Key 可访问的仓库"""
     from sqlalchemy import Table, MetaData, select, and_
@@ -548,9 +552,9 @@ async def _handle_list_branches(engine, cfg: Config, repo_id: int) -> dict:
     from .gitops import git_operations as git_ops
     repo_info = _get_repo_info(engine, repo_id)
     username, password = _get_repo_credential(engine, repo_id)
-    repo = _repo_manager.get_repo(repo_id, repo_info["name"],
+    repo = await _run_git_sync(_repo_manager.get_repo, repo_id, repo_info["name"],
                                    repo_info["url"], username, password)
-    branches = git_ops.list_branches(repo)
+    branches = await _run_git_sync(git_ops.list_branches, repo)
     return {"branches": branches}
 
 
@@ -558,9 +562,9 @@ async def _handle_list_tags(engine, cfg: Config, repo_id: int) -> dict:
     from .gitops import git_operations as git_ops
     repo_info = _get_repo_info(engine, repo_id)
     username, password = _get_repo_credential(engine, repo_id)
-    repo = _repo_manager.get_repo(repo_id, repo_info["name"],
+    repo = await _run_git_sync(_repo_manager.get_repo, repo_id, repo_info["name"],
                                    repo_info["url"], username, password)
-    tags = git_ops.list_tags(repo)
+    tags = await _run_git_sync(git_ops.list_tags, repo)
     return {"tags": tags}
 
 
@@ -569,9 +573,9 @@ async def _handle_list_tree(engine, cfg: Config, repo_id: int,
     from .gitops import git_operations as git_ops
     repo_info = _get_repo_info(engine, repo_id)
     username, password = _get_repo_credential(engine, repo_id)
-    repo = _repo_manager.get_repo(repo_id, repo_info["name"],
+    repo = await _run_git_sync(_repo_manager.get_repo, repo_id, repo_info["name"],
                                    repo_info["url"], username, password)
-    items = git_ops.list_tree(
+    items = await _run_git_sync(git_ops.list_tree,
         repo,
         path=arguments.get("path", ""),
         ref=arguments.get("ref", "HEAD"),
@@ -587,9 +591,9 @@ async def _handle_read_file(engine, cfg: Config, repo_id: int,
     from .gitops import git_operations as git_ops
     repo_info = _get_repo_info(engine, repo_id)
     username, password = _get_repo_credential(engine, repo_id)
-    repo = _repo_manager.get_repo(repo_id, repo_info["name"],
+    repo = await _run_git_sync(_repo_manager.get_repo, repo_id, repo_info["name"],
                                    repo_info["url"], username, password)
-    result = git_ops.read_file(
+    result = await _run_git_sync(git_ops.read_file,
         repo,
         path=arguments["path"],
         ref=arguments.get("ref", "HEAD"),
@@ -607,9 +611,9 @@ async def _handle_git_log(engine, cfg: Config, repo_id: int,
     from .gitops import git_operations as git_ops
     repo_info = _get_repo_info(engine, repo_id)
     username, password = _get_repo_credential(engine, repo_id)
-    repo = _repo_manager.get_repo(repo_id, repo_info["name"],
+    repo = await _run_git_sync(_repo_manager.get_repo, repo_id, repo_info["name"],
                                    repo_info["url"], username, password)
-    commits = git_ops.git_log(
+    commits = await _run_git_sync(git_ops.git_log,
         repo,
         ref=arguments.get("ref", "HEAD"),
         path=arguments.get("path"),
@@ -625,9 +629,9 @@ async def _handle_git_show(engine, cfg: Config, repo_id: int,
     from .gitops import git_operations as git_ops
     repo_info = _get_repo_info(engine, repo_id)
     username, password = _get_repo_credential(engine, repo_id)
-    repo = _repo_manager.get_repo(repo_id, repo_info["name"],
+    repo = await _run_git_sync(_repo_manager.get_repo, repo_id, repo_info["name"],
                                    repo_info["url"], username, password)
-    return git_ops.git_show(repo, commit_sha=arguments["commit_sha"])
+    return await _run_git_sync(git_ops.git_show, repo, commit_sha=arguments["commit_sha"])
 
 
 async def _handle_git_diff(engine, cfg: Config, repo_id: int,
@@ -635,9 +639,9 @@ async def _handle_git_diff(engine, cfg: Config, repo_id: int,
     from .gitops import git_operations as git_ops
     repo_info = _get_repo_info(engine, repo_id)
     username, password = _get_repo_credential(engine, repo_id)
-    repo = _repo_manager.get_repo(repo_id, repo_info["name"],
+    repo = await _run_git_sync(_repo_manager.get_repo, repo_id, repo_info["name"],
                                    repo_info["url"], username, password)
-    return git_ops.git_diff(
+    return await _run_git_sync(git_ops.git_diff,
         repo,
         ref_a=arguments["ref_a"],
         ref_b=arguments["ref_b"],
@@ -650,9 +654,9 @@ async def _handle_git_blame(engine, cfg: Config, repo_id: int,
     from .gitops import git_operations as git_ops
     repo_info = _get_repo_info(engine, repo_id)
     username, password = _get_repo_credential(engine, repo_id)
-    repo = _repo_manager.get_repo(repo_id, repo_info["name"],
+    repo = await _run_git_sync(_repo_manager.get_repo, repo_id, repo_info["name"],
                                    repo_info["url"], username, password)
-    lines = git_ops.git_blame(
+    lines = await _run_git_sync(git_ops.git_blame,
         repo,
         path=arguments["path"],
         ref=arguments.get("ref", "HEAD"),
@@ -667,9 +671,9 @@ async def _handle_git_grep(engine, cfg: Config, repo_id: int,
     from .gitops import git_operations as git_ops
     repo_info = _get_repo_info(engine, repo_id)
     username, password = _get_repo_credential(engine, repo_id)
-    repo = _repo_manager.get_repo(repo_id, repo_info["name"],
+    repo = await _run_git_sync(_repo_manager.get_repo, repo_id, repo_info["name"],
                                    repo_info["url"], username, password)
-    matches = git_ops.git_grep(
+    matches = await _run_git_sync(git_ops.git_grep,
         repo,
         pattern=arguments["pattern"],
         path=arguments.get("path"),
@@ -685,10 +689,10 @@ async def _handle_analyze_code(engine, cfg: Config, repo_id: int,
     from .gitops import git_operations as git_ops
     repo_info = _get_repo_info(engine, repo_id)
     username, password = _get_repo_credential(engine, repo_id)
-    repo = _repo_manager.get_repo(repo_id, repo_info["name"],
+    repo = await _run_git_sync(_repo_manager.get_repo, repo_id, repo_info["name"],
                                    repo_info["url"], username, password)
 
-    file_info = git_ops.read_file(
+    file_info = await _run_git_sync(git_ops.read_file,
         repo, path=arguments["path"],
         ref=arguments.get("ref", "HEAD")
     )
@@ -711,10 +715,10 @@ async def _handle_review_diff(engine, cfg: Config, repo_id: int,
     from .gitops import git_operations as git_ops
     repo_info = _get_repo_info(engine, repo_id)
     username, password = _get_repo_credential(engine, repo_id)
-    repo = _repo_manager.get_repo(repo_id, repo_info["name"],
+    repo = await _run_git_sync(_repo_manager.get_repo, repo_id, repo_info["name"],
                                    repo_info["url"], username, password)
 
-    diff_info = git_ops.git_diff(
+    diff_info = await _run_git_sync(git_ops.git_diff,
         repo, ref_a=arguments["ref_a"],
         ref_b=arguments["ref_b"], path=arguments.get("path")
     )

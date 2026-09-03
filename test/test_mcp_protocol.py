@@ -59,6 +59,16 @@ def test_repo_ref_fixup_accepts_local_heads(tmp_path):
     assert repo.head.commit.hexsha
 
 
+def test_repo_cache_path_is_unique_for_chinese_names(tmp_path):
+    manager = object.__new__(GitRepoManager)
+    manager.base_dir = str(tmp_path)
+    backend = manager._repo_path(2, "壹好车服后端")
+    frontend = manager._repo_path(3, "壹好车服前端")
+    assert backend != frontend
+    assert backend.rsplit("/", 1)[-1].startswith("2_")
+    assert frontend.rsplit("/", 1)[-1].startswith("3_")
+
+
 if __name__ == "__main__":
     test_public_base_url_has_priority()
     test_forwarded_https_is_used()

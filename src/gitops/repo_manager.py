@@ -102,10 +102,10 @@ class GitRepoManager:
         except Exception:
             pass  # 忽略错误（如 git 不存在等）
 
-    def _repo_path(self, repo_name: str) -> str:
-        """获取仓库的本地存储路径"""
+    def _repo_path(self, repo_id: int, repo_name: str) -> str:
+        """获取仓库的本地存储路径；仓库 ID 防止中文名称清洗后发生碰撞。"""
         safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', repo_name)
-        return os.path.join(self.base_dir, f"{safe_name}.git")
+        return os.path.join(self.base_dir, f"{repo_id}_{safe_name}.git")
 
     def get_repo(self, repo_id: int, repo_name: str, repo_url: str,
                  username: str = None, password: str = None) -> Repo:
@@ -121,7 +121,7 @@ class GitRepoManager:
         Returns:
             git.Repo 对象
         """
-        bare_path = self._repo_path(repo_name)
+        bare_path = self._repo_path(repo_id, repo_name)
 
         with self._lock:
             now = time.time()
