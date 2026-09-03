@@ -2,6 +2,8 @@
   import Modal from '$lib/components/Modal.svelte';
   import FormField from '$lib/components/FormField.svelte';
   import { inputCls, selectCls, btnPrimaryCls, btnGhostCls } from '$lib/ui.js';
+  import Pager from '$lib/components/Pager.svelte';
+  import RefreshBtn from '$lib/components/RefreshBtn.svelte';
   import {
     LLM_PROVIDERS, PROVIDER_OPTIONS, CUSTOM_PROVIDER, CUSTOM_MODEL_FLAG,
     providerById, providerLabel
@@ -39,6 +41,16 @@
   const showCustomModelInput = $derived(isCustomProvider || form.model_name === CUSTOM_MODEL_FLAG);
 
   const token = () => localStorage.getItem('token') || '';
+
+  // 日志客户端分页
+  let page = $state(1);
+  let pageSize = 15;
+  let curPage = $derived(Math.min(page, Math.max(1, Math.ceil(logs.length / pageSize))));
+  let shownLogs = $derived(logs.slice((curPage - 1) * pageSize, curPage * pageSize));
+  function goPage(p) {
+    const tp = Math.max(1, Math.ceil(logs.length / pageSize));
+    if (p >= 1 && p <= tp) page = p;
+  }
 
   async function load() {
     const [cRes, lRes] = await Promise.all([
@@ -173,7 +185,10 @@
 <div>
   <div class="flex justify-between items-center mb-6">
     <h1 class="text-2xl font-bold text-[var(--c-text)]">🤖 大模型配置</h1>
-    <button class={btnPrimaryCls} onclick={openCreate}>+ 新增配置</button>
+    <div class="flex items-center gap-2">
+      <RefreshBtn onclick={load} />
+      <button class={btnPrimaryCls} onclick={openCreate}>+ 新增配置</button>
+    </div>
   </div>
 
   <!-- 新增配置弹窗 -->
@@ -356,8 +371,9 @@
 
     <!-- Token 消耗日志 -->
     <div class="bg-[var(--c-surface)] rounded-xl shadow border border-[var(--c-border)]">
-      <div class="px-6 py-4 border-b border-[var(--c-border)]">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-[var(--c-border)]">
         <h2 class="font-bold text-[var(--c-text)]">最近调用日志</h2>
+        <span class="text-xs text-[var(--c-text-secondary)]">共 {logs.length} 条</span>
       </div>
       <div class="overflow-x-auto">
         <table class="table table-sm">
@@ -365,7 +381,7 @@
             <tr><th>时间</th><th>Key</th><th>工具</th><th>模型</th><th>输入Token</th><th>输出Token</th><th>耗时</th><th>状态</th></tr>
           </thead>
           <tbody>
-            {#each logs as log}
+            {#each shownLogs as log}
               <tr>
                 <td class="text-xs whitespace-nowrap text-[var(--c-text-secondary)]">{new Date(log.timestamp).toLocaleString()}</td>
                 <td class="font-mono text-xs text-[var(--c-text-secondary)]">{log.access_key?.slice(0, 12) || '-'}...</td>
@@ -380,6 +396,7 @@
           </tbody>
         </table>
       </div>
+      <Pager {page} total={logs.length} {pageSize} ongo={goPage} />
       {#if logs.length === 0}
         <div class="text-center text-[var(--c-text-secondary)] py-4">暂无调用记录</div>
       {/if}

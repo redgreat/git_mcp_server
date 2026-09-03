@@ -2,6 +2,8 @@
   import Modal from '$lib/components/Modal.svelte';
   import FormField from '$lib/components/FormField.svelte';
   import { inputCls, selectCls, btnPrimaryCls, btnGhostCls } from '$lib/ui.js';
+  import Pager from '$lib/components/Pager.svelte';
+  import RefreshBtn from '$lib/components/RefreshBtn.svelte';
 
   let perms = $state([]);
   let keys = $state([]);
@@ -12,6 +14,16 @@
   let form = $state({ key_id: null, repo_id: null, access_level: 'read_only', branch_pattern: '.*', path_pattern: '.*' });
 
   const token = () => localStorage.getItem('token') || '';
+
+  // 客户端分页
+  let page = $state(1);
+  let pageSize = 15;
+  let curPage = $derived(Math.min(page, Math.max(1, Math.ceil(perms.length / pageSize))));
+  let shownPerms = $derived(perms.slice((curPage - 1) * pageSize, curPage * pageSize));
+  function goPage(p) {
+    const tp = Math.max(1, Math.ceil(perms.length / pageSize));
+    if (p >= 1 && p <= tp) page = p;
+  }
 
   async function load() {
     const [pRes, kRes, rRes] = await Promise.all([
@@ -95,7 +107,11 @@
 <div>
   <div class="flex justify-between items-center mb-6">
     <h1 class="text-2xl font-bold text-[var(--c-text)]">🔒 权限分配</h1>
-    <button class={btnPrimaryCls} onclick={openGrant}>+ 授权仓库</button>
+    <div class="flex items-center gap-2">
+      <span class="text-xs text-[var(--c-text-secondary)]">共 {perms.length} 条</span>
+      <RefreshBtn onclick={load} />
+      <button class={btnPrimaryCls} onclick={openGrant}>+ 授权仓库</button>
+    </div>
   </div>
 
   <!-- 授权/编辑弹窗 -->
@@ -160,7 +176,7 @@
           </tr>
         </thead>
         <tbody>
-          {#each perms as p}
+          {#each shownPerms as p}
             <tr>
               <td class="font-mono text-xs text-[var(--c-text-secondary)]">{keyLabel(p.key_id)}</td>
               <td class="font-bold text-[var(--c-text)]">{repoLabel(p.repo_id)}</td>
@@ -180,6 +196,7 @@
         </tbody>
       </table>
     </div>
+    <Pager {page} total={perms.length} {pageSize} ongo={goPage} />
     {#if perms.length === 0}
       <div class="text-center text-[var(--c-text-secondary)] py-8">暂无权限分配，请先创建 Key 和仓库后授权</div>
     {/if}

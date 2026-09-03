@@ -2,6 +2,8 @@
   import Modal from '$lib/components/Modal.svelte';
   import FormField from '$lib/components/FormField.svelte';
   import { inputCls, selectCls, btnPrimaryCls, btnGhostCls } from '$lib/ui.js';
+  import Pager from '$lib/components/Pager.svelte';
+  import RefreshBtn from '$lib/components/RefreshBtn.svelte';
 
   let repos = $state([]);
   let loading = $state(true);
@@ -17,6 +19,16 @@
   let pollTimers = {};
 
   const token = () => localStorage.getItem('token') || '';
+
+  // 客户端分页
+  let page = $state(1);
+  let pageSize = 10;
+  let curPage = $derived(Math.min(page, Math.max(1, Math.ceil(repos.length / pageSize))));
+  let shownRepos = $derived(repos.slice((curPage - 1) * pageSize, curPage * pageSize));
+  function goPage(p) {
+    const tp = Math.max(1, Math.ceil(repos.length / pageSize));
+    if (p >= 1 && p <= tp) page = p;
+  }
 
   function showToast(type, message) {
     toast = { type, message };
@@ -166,7 +178,11 @@
 <div>
   <div class="flex justify-between items-center mb-6">
     <h1 class="text-2xl font-bold text-[var(--c-text)]">📦 仓库管理</h1>
-    <button class={btnPrimaryCls} onclick={openCreate}>+ 添加仓库</button>
+    <div class="flex items-center gap-2">
+      <span class="text-xs text-[var(--c-text-secondary)]">共 {repos.length} 个</span>
+      <RefreshBtn onclick={load} />
+      <button class={btnPrimaryCls} onclick={openCreate}>+ 添加仓库</button>
+    </div>
   </div>
 
   <!-- 操作结果提示 -->
@@ -249,7 +265,7 @@
           </tr>
         </thead>
         <tbody>
-          {#each repos as r}
+          {#each shownRepos as r}
             {@const task = getTaskStatus(r)}
             <tr>
               <td class="font-bold text-[var(--c-text)]">{r.name}</td>
@@ -290,6 +306,7 @@
         </tbody>
       </table>
     </div>
+    <Pager {page} total={repos.length} {pageSize} ongo={goPage} />
     {#if repos.length === 0}
       <div class="text-center text-[var(--c-text-secondary)] py-8">暂无仓库，点击右上角添加</div>
     {/if}

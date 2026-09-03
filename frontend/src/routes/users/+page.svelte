@@ -2,6 +2,8 @@
   import Modal from '$lib/components/Modal.svelte';
   import FormField from '$lib/components/FormField.svelte';
   import { inputCls, selectCls, btnPrimaryCls, btnGhostCls, btnDangerCls } from '$lib/ui.js';
+  import Pager from '$lib/components/Pager.svelte';
+  import RefreshBtn from '$lib/components/RefreshBtn.svelte';
 
   let users = $state([]);
   let loading = $state(true);
@@ -12,6 +14,17 @@
   let resetForm = $state({ new_password: '' });
 
   const token = () => localStorage.getItem('token') || '';
+
+  // 客户端分页
+  let page = $state(1);
+  let pageSize = 15;
+  let curPage = $derived(Math.min(page, Math.max(1, Math.ceil(users.length / pageSize))));
+  let shownUsers = $derived(users.slice((curPage - 1) * pageSize, curPage * pageSize));
+  function goPage(p) {
+    const tp = Math.max(1, Math.ceil(users.length / pageSize));
+    if (p >= 1 && p <= tp) page = p;
+  }
+
 
   async function load() {
     const res = await fetch('/api/admin/users', { headers: { Authorization: token() } });
@@ -65,7 +78,11 @@
 <div>
   <div class="flex justify-between items-center mb-6">
     <h1 class="text-2xl font-bold text-[var(--c-text)]">👥 用户管理</h1>
-    <button class={btnPrimaryCls} onclick={() => { form = { username: '', password: '', email: '', role: 'user' }; showForm = true; }}>+ 添加用户</button>
+    <div class="flex items-center gap-2">
+      <span class="text-xs text-[var(--c-text-secondary)]">共 {users.length} 条</span>
+      <RefreshBtn onclick={load} />
+      <button class={btnPrimaryCls} onclick={() => { form = { username: '', password: '', email: '', role: 'user' }; showForm = true; }}>+ 添加用户</button>
+    </div>
   </div>
 
   <!-- 添加用户弹窗 -->
@@ -125,7 +142,7 @@
           <tr><th>用户名</th><th>邮箱</th><th>角色</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
         </thead>
         <tbody>
-          {#each users as u}
+          {#each shownUsers as u}
             <tr>
               <td class="font-bold text-[var(--c-text)]">{u.username}</td>
               <td class="text-xs text-[var(--c-text-secondary)]">{u.email || '-'}</td>
@@ -149,5 +166,9 @@
         </tbody>
       </table>
     </div>
+    <Pager {page} total={users.length} {pageSize} ongo={goPage} />
+    {#if users.length === 0}
+      <div class="text-center text-[var(--c-text-secondary)] py-8">暂无用户</div>
+    {/if}
   {/if}
 </div>

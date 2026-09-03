@@ -2,6 +2,8 @@
   import Modal from '$lib/components/Modal.svelte';
   import FormField from '$lib/components/FormField.svelte';
   import { inputCls, btnPrimaryCls, btnGhostCls } from '$lib/ui.js';
+  import Pager from '$lib/components/Pager.svelte';
+  import RefreshBtn from '$lib/components/RefreshBtn.svelte';
 
   let keys = $state([]);
   let loading = $state(true);
@@ -9,6 +11,16 @@
   let form = $state({ ak: '', description: '', enabled: true });
 
   const token = () => localStorage.getItem('token') || '';
+
+  // 客户端分页
+  let page = $state(1);
+  let pageSize = 15;
+  let curPage = $derived(Math.min(page, Math.max(1, Math.ceil(keys.length / pageSize))));
+  let shownKeys = $derived(keys.slice((curPage - 1) * pageSize, curPage * pageSize));
+  function goPage(p) {
+    const tp = Math.max(1, Math.ceil(keys.length / pageSize));
+    if (p >= 1 && p <= tp) page = p;
+  }
 
   async function load() {
     const res = await fetch('/api/admin/keys', { headers: { Authorization: token() } });
@@ -53,7 +65,11 @@
 <div>
   <div class="flex justify-between items-center mb-6">
     <h1 class="text-2xl font-bold text-[var(--c-text)]">🗝️ Access Key 管理</h1>
-    <button class={btnPrimaryCls} onclick={() => { form = { ak: '', description: '', enabled: true }; showForm = true; }}>+ 创建 Key</button>
+    <div class="flex items-center gap-2">
+      <span class="text-xs text-[var(--c-text-secondary)]">共 {keys.length} 条</span>
+      <RefreshBtn onclick={load} />
+      <button class={btnPrimaryCls} onclick={() => { form = { ak: '', description: '', enabled: true }; showForm = true; }}>+ 创建 Key</button>
+    </div>
   </div>
 
   <!-- 创建 Access Key 弹窗 -->
@@ -92,7 +108,7 @@
           </tr>
         </thead>
         <tbody>
-          {#each keys as k}
+          {#each shownKeys as k}
             <tr>
               <td>
                 <div class="flex items-center gap-2">
@@ -117,6 +133,7 @@
         </tbody>
       </table>
     </div>
+    <Pager {page} total={keys.length} {pageSize} ongo={goPage} />
     {#if keys.length === 0}
       <div class="text-center text-[var(--c-text-secondary)] py-8">暂无 Key，请创建</div>
     {/if}
