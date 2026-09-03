@@ -33,7 +33,15 @@
       const res = await fetch(`/api/admin/repos/${r.id}/fetch`, {
         method: 'POST', headers: { Authorization: token() }
       });
-      const data = await res.json();
+      // 先读文本，再尝试解析 JSON，避免非 JSON 响应（如代理 504 HTML）导致解析报错
+      const text = await res.text();
+      let data = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch (parseErr) {
+        console.error(`[拉取] 响应不是 JSON (HTTP ${res.status}):`, text.slice(0, 500));
+        throw new Error(`服务器返回异常 (HTTP ${res.status})，请检查后端日志。${text ? '响应片段: ' + text.slice(0, 120) : ''}`);
+      }
       if (!res.ok) throw new Error(data.detail || '提交失败');
       console.log(`[拉取] 任务已提交: task_id=${data.task_id}`);
 
@@ -58,13 +66,27 @@
         const res = await fetch(`/api/admin/repos/${repoId}/fetch/status`, {
           headers: { Authorization: token() }
         });
-        if (!res.ok) return;
-        const status = await res.json();
+        if (!res.ok) {
+          // 状态接口不可用（如服务重启/旧版本后端）：停止轮询避免死循环
+          stopPolling(repoId);
+          delete fetchTasks[repoId];
+          fetchTasks = { ...fetchTasks };
+          await load();
+          return;
+        }
+        const text = await res.text();
+        let status = {};
+        try {
+          status = text ? JSON.parse(text) : {};
+        } catch (e) {
+          stopPolling(repoId);
+          return;
+        }
 
         fetchTasks[repoId] = status;
         fetchTasks = { ...fetchTasks };
 
-        // 完成或出错后停止轮询，刷新列表
+        // 完成 / 出错 / 任务丢失（服务重启后 idle）→ 停止轮询并刷新
         if (status.status === 'done' || status.status === 'error') {
           stopPolling(repoId);
           if (status.status === 'done') {
@@ -73,9 +95,14 @@
             showToast('error', `❌ ${status.repo_name}：${status.error || status.message}`);
           }
           await load(); // 刷新 last_fetched_at
+        } else if (status.status === 'idle') {
+          stopPolling(repoId);
+          delete fetchTasks[repoId];
+          fetchTasks = { ...fetchTasks };
+          await load();
         }
       } catch (e) {
-        // 轮询错误不中断，下次继续
+        // 网络异常：下次轮询继续
       }
     }, 2000); // 每 2 秒查询一次
   }

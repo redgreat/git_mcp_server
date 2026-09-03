@@ -430,8 +430,9 @@ async def _handle_mcp_tool(engine, cfg: Config, access_key: str,
         else:
             raise HTTPException(status_code=400, detail=f"未知工具: {tool_name}")
 
-    except HTTPException:
+    except HTTPException as e:
         status = "denied"
+        error_msg = str(e.detail)
         raise
     except Exception as e:
         status = "error"
@@ -490,6 +491,16 @@ def _log_audit(engine, audit_logs, access_key: str, client_ip: str,
 def _run_git_sync(fn, *args, **kwargs):
     """将同步 Git 操作放入线程池执行，避免阻塞事件循环"""
     return asyncio.to_thread(fn, *args, **kwargs)
+
+
+def _pick_ref(arguments: dict, repo_info: dict) -> str:
+    """选择读取版本：优先 LLM 显式指定的 ref；其次仓库配置的主分支；最后 HEAD"""
+    ref = arguments.get("ref")
+    if ref:
+        return ref
+    if repo_info and repo_info.get("main_branch"):
+        return repo_info["main_branch"]
+    return "HEAD"
 
 async def _handle_list_repos(engine, access_key: str, arguments: dict) -> dict:
     """列出当前 Key 可访问的仓库"""
@@ -575,14 +586,15 @@ async def _handle_list_tree(engine, cfg: Config, repo_id: int,
     username, password = _get_repo_credential(engine, repo_id)
     repo = await _run_git_sync(_repo_manager.get_repo, repo_id, repo_info["name"],
                                    repo_info["url"], username, password)
+    ref = _pick_ref(arguments, repo_info)
     items = await _run_git_sync(git_ops.list_tree,
         repo,
         path=arguments.get("path", ""),
-        ref=arguments.get("ref", "HEAD"),
+        ref=ref,
         recursive=arguments.get("recursive", True),
     )
     _logger.info(f"列出目录: repo={repo_info['name']}, path={arguments.get('path', '/')}, "
-                 f"ref={arguments.get('ref', 'HEAD')}, items={len(items)}")
+                 f"ref={ref}, items={len(items)}")
     return {"tree": items}
 
 
@@ -593,15 +605,16 @@ async def _handle_read_file(engine, cfg: Config, repo_id: int,
     username, password = _get_repo_credential(engine, repo_id)
     repo = await _run_git_sync(_repo_manager.get_repo, repo_id, repo_info["name"],
                                    repo_info["url"], username, password)
+    ref = _pick_ref(arguments, repo_info)
     result = await _run_git_sync(git_ops.read_file,
         repo,
         path=arguments["path"],
-        ref=arguments.get("ref", "HEAD"),
+        ref=ref,
         start_line=arguments.get("start_line"),
         end_line=arguments.get("end_line"),
     )
     _logger.info(f"读取文件: repo={repo_info['name']}, path={arguments['path']}, "
-                 f"ref={arguments.get('ref', 'HEAD')}, size={result.get('size', 0)} bytes, "
+                 f"ref={ref}, size={result.get('size', 0)} bytes, "
                  f"lines={result.get('total_lines', 0)}")
     return result
 
@@ -615,7 +628,7 @@ async def _handle_git_log(engine, cfg: Config, repo_id: int,
                                    repo_info["url"], username, password)
     commits = await _run_git_sync(git_ops.git_log,
         repo,
-        ref=arguments.get("ref", "HEAD"),
+        ref=_pick_ref(arguments, repo_info),
         path=arguments.get("path"),
         max_count=arguments.get("max_count", 50),
         since=arguments.get("since"),
@@ -659,7 +672,7 @@ async def _handle_git_blame(engine, cfg: Config, repo_id: int,
     lines = await _run_git_sync(git_ops.git_blame,
         repo,
         path=arguments["path"],
-        ref=arguments.get("ref", "HEAD"),
+        ref=_pick_ref(arguments, repo_info),
         start_line=arguments.get("start_line"),
         end_line=arguments.get("end_line"),
     )
@@ -677,7 +690,7 @@ async def _handle_git_grep(engine, cfg: Config, repo_id: int,
         repo,
         pattern=arguments["pattern"],
         path=arguments.get("path"),
-        ref=arguments.get("ref", "HEAD"),
+        ref=_pick_ref(arguments, repo_info),
         ignore_case=arguments.get("ignore_case", False),
     )
     return {"matches": matches}
@@ -694,7 +707,7 @@ async def _handle_analyze_code(engine, cfg: Config, repo_id: int,
 
     file_info = await _run_git_sync(git_ops.read_file,
         repo, path=arguments["path"],
-        ref=arguments.get("ref", "HEAD")
+        ref=_pick_ref(arguments, repo_info)
     )
     question = arguments["question"]
 

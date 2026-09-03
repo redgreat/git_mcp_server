@@ -727,27 +727,45 @@ def build_admin_router(cfg: Config, repo_manager=None):
                         repo_id: Optional[int] = None,
                         operation: Optional[str] = None,
                         status: Optional[str] = None,
-                        limit: int = 100,
+                        page: int = 1,
+                        page_size: int = 20,
                         authorization: str = Header(None)):
+        """审计日志查询（分页）
+
+        Returns: {"total": int, "page": int, "page_size": int, "items": [...]}
+        """
         _get_user(authorization)
+        page = max(1, page)
+        page_size = max(1, min(page_size, 200))
+        from sqlalchemy import func as sa_func
         with Session(engine) as session:
-            stmt = select(audit_logs).order_by(audit_logs.c.timestamp.desc()).limit(min(limit, 500))
+            base = select(audit_logs)
+            count_stmt = select(sa_func.count()).select_from(audit_logs)
             if access_key:
-                stmt = stmt.where(audit_logs.c.access_key == access_key)
+                base = base.where(audit_logs.c.access_key == access_key)
+                count_stmt = count_stmt.where(audit_logs.c.access_key == access_key)
             if repo_id:
-                stmt = stmt.where(audit_logs.c.repo_id == repo_id)
+                base = base.where(audit_logs.c.repo_id == repo_id)
+                count_stmt = count_stmt.where(audit_logs.c.repo_id == repo_id)
             if operation:
-                stmt = stmt.where(audit_logs.c.operation == operation)
+                base = base.where(audit_logs.c.operation == operation)
+                count_stmt = count_stmt.where(audit_logs.c.operation == operation)
             if status:
-                stmt = stmt.where(audit_logs.c.status == status)
+                base = base.where(audit_logs.c.status == status)
+                count_stmt = count_stmt.where(audit_logs.c.status == status)
+
+            total = session.execute(count_stmt).scalar() or 0
+            stmt = base.order_by(audit_logs.c.timestamp.desc(), audit_logs.c.id.desc()) \
+                .offset((page - 1) * page_size).limit(page_size)
             rows = session.execute(stmt).mappings().all()
-        return [{"id": r["id"], "timestamp": str(r["timestamp"]),
-                 "access_key": r["access_key"], "client_ip": r["client_ip"],
-                 "repo_id": r["repo_id"], "repo_name": r.get("repo_name"),
-                 "operation": r["operation"], "target": r["target"],
-                 "duration_ms": r["duration_ms"], "status": r["status"],
-                 "error_message": r["error_message"]}
-                for r in rows]
+        return {"total": total, "page": page, "page_size": page_size,
+                "items": [{"id": r["id"], "timestamp": str(r["timestamp"]),
+                           "access_key": r["access_key"], "client_ip": r["client_ip"],
+                           "repo_id": r["repo_id"], "repo_name": r.get("repo_name"),
+                           "operation": r["operation"], "target": r["target"],
+                           "duration_ms": r["duration_ms"], "status": r["status"],
+                           "error_message": r["error_message"]}
+                          for r in rows]}
 
     # ========== 系统操作日志查询 ==========
 
