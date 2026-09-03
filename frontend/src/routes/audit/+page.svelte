@@ -1,31 +1,16 @@
 <script>
-  import { tick } from 'svelte';
+  import { onMount } from 'svelte';
 
   let logs = $state([]);
   let loading = $state(true);
   let total = $state(0);
   let page = $state(1);
+  let pageSize = $state(20); // 固定每页条数
   let totalPages = $state(1);
-  let pageSize = $state(15); // 自适应：按屏幕高度算出一屏能放几行
   let filter = $state({ access_key: '', operation: '', status: '' });
   let expandedRow = $state(null); // 点击展开查看完整错误
 
-  let areaEl = $state(null); // 表格可视区域（用于测量）
-  let rowH = $state(0);      // 实测单行高度(px)
-  let areaH = $state(0);     // 表格可视区域高度(px)
-  let headerH = $state(37);  // 表头高度(px)
-
   const token = () => localStorage.getItem('token') || '';
-
-  // 每页条数 = 可视高度能放下的行数（去掉表头与留白）
-  function computePageSize() {
-    if (!rowH || !areaH) return;
-    const fit = Math.max(5, Math.min(60, Math.floor((areaH - headerH - 8) / rowH)));
-    if (fit !== pageSize) {
-      pageSize = fit;
-      page = 1; // pageSize/page 变化会触发 $effect 重新加载
-    }
-  }
 
   async function load() {
     loading = true;
@@ -44,33 +29,35 @@
         logs = data.items || [];
         total = data.total || 0;
         totalPages = Math.max(1, Math.ceil(total / pageSize));
-        if (page > totalPages) { page = totalPages; return; }
+        if (page > totalPages) {
+          page = totalPages;
+          await load(); // 越界时回到最后一页重新加载
+          return;
+        }
       }
     } finally {
       loading = false;
       expandedRow = null;
-      await tick();        // 等 DOM 渲染完
-      measureLayout();     // 实测行高 → 校准每页条数
     }
   }
 
-  // 实测表头高度 + 首行高度
-  function measureLayout() {
-    if (!areaEl) return;
-    const th = areaEl.querySelector('thead');
-    const tr = areaEl.querySelector('tbody tr.main-row');
-    headerH = th ? th.getBoundingClientRect().height : 37;
-    rowH = tr ? tr.getBoundingClientRect().height : 44;
-    computePageSize();
-  }
+  // 首次加载（只在挂载时触发一次，避免与手动 load 重复）
+  onMount(() => { load(); });
 
   function onFilterChange() {
     page = 1;
+    load();
+  }
+
+  function changePageSize() {
+    page = 1;
+    load();
   }
 
   function goPage(p) {
     if (p < 1 || p > totalPages || p === page) return;
     page = p;
+    load();
   }
 
   function toggleExpand(logId) {
@@ -94,38 +81,16 @@
     }
     return out;
   });
-
-  // 过滤器 / 页码 / 每页条数 任一变化 → 重新加载
-  $effect(() => {
-    void filter.access_key; void filter.operation; void filter.status;
-    void page; void pageSize;
-    load();
-  });
-
-  // 监听表格可视区域尺寸变化（窗口缩放、侧栏折叠等）→ 重算每页条数
-  $effect(() => {
-    const el = areaEl;
-    if (!el) return;
-    const measure = () => {
-      areaH = el.clientHeight;
-      computePageSize();
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  });
 </script>
 
-<div class="flex flex-col" style="height: calc(100vh - 7rem); min-height: 460px;">
-  <!-- 标题行 -->
-  <div class="flex items-center justify-between mb-3 shrink-0">
+<div>
+  <div class="flex items-center justify-between mb-4">
     <h1 class="text-2xl font-bold text-[var(--c-text)]">📋 审计日志</h1>
-    <span class="text-xs text-[var(--c-text-secondary)]">共 {total} 条 · 每页 {pageSize} 条</span>
+    <span class="text-xs text-[var(--c-text-secondary)]">共 {total} 条</span>
   </div>
 
   <!-- 工具栏 -->
-  <div class="flex flex-wrap gap-2 mb-3 shrink-0 items-center">
+  <div class="flex flex-wrap gap-2 mb-4 items-center">
     <input type="text" class="input input-bordered input-sm w-44" placeholder="Access Key" bind:value={filter.access_key} oninput={onFilterChange} />
     <select class="select select-bordered select-sm" bind:value={filter.operation} onchange={onFilterChange}>
       <option value="">全部操作</option>
@@ -150,19 +115,13 @@
     </select>
   </div>
 
-  <!-- 表格：占满剩余高度（一屏），页内不滚动 -->
-  <div
-    bind:this={areaEl}
-    class="flex-1 min-h-0 rounded-xl shadow border border-[var(--c-border)] bg-[var(--c-surface)] overflow-y-auto"
-  >
-    {#if loading}
-      <div class="flex items-center justify-center py-20"><span class="loading loading-spinner loading-lg"></span></div>
-    {:else if logs.length === 0}
-      <div class="flex items-center justify-center py-20 text-[var(--c-text-secondary)]">暂无审计日志</div>
-    {:else}
+  {#if loading}
+    <div class="flex justify-center py-16"><span class="loading loading-spinner loading-lg"></span></div>
+  {:else}
+    <div class="overflow-x-auto bg-[var(--c-surface)] rounded-xl shadow border border-[var(--c-border)]">
       <table class="table">
-        <thead class="sticky top-0 bg-[var(--c-surface)] z-10">
-          <tr class="border-b border-[var(--c-border)]">
+        <thead>
+          <tr>
             <th class="text-xs">时间</th>
             <th class="text-xs">Access Key</th>
             <th class="text-xs">IP</th>
@@ -177,7 +136,7 @@
           {#each logs as log}
             {@const hasDetail = (log.status === 'error' || log.status === 'denied') && log.error_message}
             {@const expanded = expandedRow === log.id}
-            <tr class="main-row h-11 hover:bg-[var(--c-hover)] {hasDetail && expanded ? 'bg-error/10' : ''}">
+            <tr class="hover:bg-[var(--c-hover)] {hasDetail && expanded ? 'bg-error/10' : ''}">
               <td class="text-xs whitespace-nowrap">{new Date(log.timestamp).toLocaleString()}</td>
               <td class="font-mono text-xs">{log.access_key?.slice(0, 12)}...</td>
               <td class="font-mono text-xs">{log.client_ip}</td>
@@ -218,28 +177,37 @@
           {/each}
         </tbody>
       </table>
-    {/if}
-  </div>
-
-  <!-- 分页（固定底部） -->
-  {#if !loading && totalPages > 1}
-    <div class="flex flex-wrap items-center justify-between gap-2 mt-3 shrink-0">
-      <div class="text-xs text-[var(--c-text-secondary)]">
-        共 <span class="font-bold">{total}</span> 条 · 第 <span class="font-bold">{page}</span> / {totalPages} 页
-      </div>
-      <div class="join">
-        <button class="join-item btn btn-sm" onclick={() => goPage(1)} disabled={page <= 1}>«</button>
-        <button class="join-item btn btn-sm" onclick={() => goPage(page - 1)} disabled={page <= 1}>‹</button>
-        {#each pageList as p}
-          {#if p === '…'}
-            <button class="join-item btn btn-sm btn-disabled">…</button>
-          {:else}
-            <button class="join-item btn btn-sm {p === page ? 'btn-primary' : ''}" onclick={() => goPage(p)}>{p}</button>
-          {/if}
-        {/each}
-        <button class="join-item btn btn-sm" onclick={() => goPage(page + 1)} disabled={page >= totalPages}>›</button>
-        <button class="join-item btn btn-sm" onclick={() => goPage(totalPages)} disabled={page >= totalPages}>»</button>
-      </div>
     </div>
+
+    {#if logs.length === 0}
+      <div class="text-center text-[var(--c-text-secondary)] py-8">暂无审计日志</div>
+    {/if}
+
+    <!-- 分页 -->
+    {#if totalPages > 1}
+      <div class="flex flex-wrap items-center justify-between gap-2 mt-4">
+        <div class="text-xs text-[var(--c-text-secondary)]">
+          共 <span class="font-bold">{total}</span> 条 · 第 <span class="font-bold">{page}</span> / {totalPages} 页
+        </div>
+        <div class="join">
+          <button class="join-item btn btn-sm" onclick={() => goPage(1)} disabled={page <= 1}>«</button>
+          <button class="join-item btn btn-sm" onclick={() => goPage(page - 1)} disabled={page <= 1}>‹</button>
+          {#each pageList as p}
+            {#if p === '…'}
+              <button class="join-item btn btn-sm btn-disabled">…</button>
+            {:else}
+              <button class="join-item btn btn-sm {p === page ? 'btn-primary' : ''}" onclick={() => goPage(p)}>{p}</button>
+            {/if}
+          {/each}
+          <button class="join-item btn btn-sm" onclick={() => goPage(page + 1)} disabled={page >= totalPages}>›</button>
+          <button class="join-item btn btn-sm" onclick={() => goPage(totalPages)} disabled={page >= totalPages}>»</button>
+        </div>
+        <select class="select select-bordered select-sm" bind:value={pageSize} onchange={changePageSize}>
+          <option value={20}>20 条/页</option>
+          <option value={50}>50 条/页</option>
+          <option value={100}>100 条/页</option>
+        </select>
+      </div>
+    {/if}
   {/if}
 </div>
