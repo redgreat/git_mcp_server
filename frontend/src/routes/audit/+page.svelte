@@ -3,10 +3,10 @@
   let loading = $state(true);
   let total = $state(0);
   let page = $state(1);
-  let pageSize = $state(20);
+  let pageSize = $state(50); // 默认一屏数据
   let totalPages = $state(1);
   let filter = $state({ access_key: '', operation: '', status: '' });
-  let expandedRow = $state(null); // 展开的行ID，用于显示完整错误详情
+  let expandedRow = $state(null); // 展开的行ID，点击查看完整错误
 
   const token = () => localStorage.getItem('token') || '';
 
@@ -26,21 +26,26 @@
       logs = data.items || [];
       total = data.total || 0;
       totalPages = Math.max(1, Math.ceil(total / pageSize));
+      if (page > totalPages) { page = totalPages; load(); return; }
     }
     loading = false;
-    expandedRow = null; // 重置展开状态
+    expandedRow = null;
   }
   $effect(() => { load(); });
 
-  // 过滤器变化时回到第一页
   function onFilterChange() {
     page = 1;
     load();
   }
 
   function goPage(p) {
-    if (p < 1 || p > totalPages) return;
+    if (p < 1 || p > totalPages || p === page) return;
     page = p;
+    load();
+  }
+
+  function changePageSize() {
+    page = 1;
     load();
   }
 
@@ -48,19 +53,31 @@
     expandedRow = expandedRow === logId ? null : logId;
   }
 
-  // 简洁显示错误：状态为 error/denied 时，第一行截断展示原因
-  function shortError(msg) {
-    if (!msg) return '';
-    const oneLine = msg.replace(/\s+/g, ' ').trim();
-    return oneLine.length > 120 ? oneLine.slice(0, 120) + '…' : oneLine;
-  }
+  // 计算显示页码（前后各 1 页 + 首尾页）
+  let pageList = $derived.by(() => {
+    const pages = [];
+    const add = (p) => { if (p >= 1 && p <= totalPages && !pages.includes(p)) pages.push(p); };
+    add(1);
+    add(page - 1); add(page); add(page + 1);
+    add(totalPages);
+    pages.sort((a, b) => a - b);
+    const out = [];
+    let prev = 0;
+    for (const p of pages) {
+      if (prev && p - prev > 1) out.push('…');
+      out.push(p);
+      prev = p;
+    }
+    return out;
+  });
 </script>
 
 <div>
   <h1 class="text-2xl font-bold mb-6">📋 审计日志</h1>
 
-  <div class="flex gap-2 mb-4 flex-wrap items-center">
-    <input type="text" class="input input-bordered input-sm" placeholder="Access Key" bind:value={filter.access_key} oninput={onFilterChange} />
+  <!-- 工具栏 -->
+  <div class="flex flex-wrap gap-2 mb-4 items-center">
+    <input type="text" class="input input-bordered input-sm w-44" placeholder="Access Key" bind:value={filter.access_key} oninput={onFilterChange} />
     <select class="select select-bordered select-sm" bind:value={filter.operation} onchange={onFilterChange}>
       <option value="">全部操作</option>
       <option value="list_repos">list_repos</option>
@@ -82,14 +99,14 @@
       <option value="denied">拒绝</option>
       <option value="error">错误</option>
     </select>
-    <span class="text-xs text-gray-500 ml-auto">共 {total} 条</span>
+    <span class="text-xs text-[var(--c-text-secondary)] ml-auto">共 {total} 条</span>
   </div>
 
   {#if loading}
     <div class="flex justify-center py-16"><span class="loading loading-spinner loading-lg"></span></div>
   {:else}
-    <div class="overflow-x-auto bg-base-100 rounded-box shadow">
-      <table class="table table-sm">
+    <div class="overflow-x-auto bg-[var(--c-surface)] rounded-xl shadow border border-[var(--c-border)]">
+      <table class="table">
         <thead>
           <tr>
             <th>时间</th>
@@ -105,7 +122,8 @@
         <tbody>
           {#each logs as log}
             {@const hasDetail = (log.status === 'error' || log.status === 'denied') && log.error_message}
-            <tr class="{hasDetail ? 'bg-error/5 hover:bg-error/10' : ''}">
+            {@const expanded = expandedRow === log.id}
+            <tr class="hover:bg-[var(--c-hover)] {hasDetail && expanded ? 'bg-error/10' : ''}">
               <td class="text-xs whitespace-nowrap">{new Date(log.timestamp).toLocaleString()}</td>
               <td class="font-mono text-xs">{log.access_key?.slice(0, 12)}...</td>
               <td class="font-mono text-xs">{log.client_ip}</td>
@@ -114,24 +132,33 @@
               <td class="max-w-40 truncate text-xs" title={log.target}>{log.target}</td>
               <td class="text-xs">{log.duration_ms}ms</td>
               <td>
-                <span class="badge {log.status === 'success' ? 'badge-success' : log.status === 'denied' ? 'badge-warning' : 'badge-error'} badge-xs">
-                  {log.status}
-                </span>
+                {#if hasDetail}
+                  <button
+                    class="badge {log.status === 'denied' ? 'badge-warning' : 'badge-error'} badge-xs gap-0.5 cursor-pointer hover:opacity-80"
+                    onclick={() => toggleExpand(log.id)}
+                    title="点击查看原因"
+                  >
+                    {log.status} ⚠
+                  </button>
+                {:else}
+                  <span class="badge {log.status === 'success' ? 'badge-success' : log.status === 'denied' ? 'badge-warning' : 'badge-error'} badge-xs">
+                    {log.status}
+                  </span>
+                {/if}
               </td>
             </tr>
-            {#if hasDetail}
-              <tr class="cursor-pointer" onclick={() => toggleExpand(log.id)}>
+            {#if expanded}
+              <tr>
                 <td colspan="8" class="p-0">
-                  <div class="pl-14 pr-3 pb-1 text-xs">
-                    <span class="font-bold {log.status === 'denied' ? 'text-warning' : 'text-error'}">
-                      {log.status === 'denied' ? '⛔ 拒绝原因' : '❌ 错误原因'}:
-                    </span>
-                    <span class="font-mono text-error/90 break-all">
-                      {expandedRow === log.id ? log.error_message : shortError(log.error_message)}
-                    </span>
-                    {#if expandedRow !== log.id && shortError(log.error_message).length >= 120}
-                      <span class="text-info">（点击查看完整）</span>
-                    {/if}
+                  <div class="bg-error/10 border-t border-error/20 px-4 py-2.5">
+                    <div class="flex items-start gap-2">
+                      <span class="font-bold text-xs shrink-0 {log.status === 'denied' ? 'text-warning' : 'text-error'}">
+                        {log.status === 'denied' ? '⛔ 拒绝原因' : '❌ 错误详情'}
+                      </span>
+                      <span class="text-xs font-mono {log.status === 'denied' ? 'text-warning/90' : 'text-error/90'} break-all whitespace-pre-wrap max-h-48 overflow-y-auto">
+                        {log.error_message}
+                      </span>
+                    </div>
                   </div>
                 </td>
               </tr>
@@ -142,43 +169,35 @@
     </div>
 
     {#if logs.length === 0}
-      <div class="text-center text-gray-500 py-8">暂无审计日志</div>
+      <div class="text-center text-[var(--c-text-secondary)] py-10">暂无审计日志</div>
     {/if}
 
     <!-- 分页 -->
-    {#if totalPages > 1}
-      <div class="flex items-center justify-center gap-2 mt-4">
-        <button
-          class="btn btn-xs {page <= 1 ? 'btn-disabled' : 'btn-outline'}"
-          onclick={() => goPage(1)}
-          disabled={page <= 1}
-        >« 首页</button>
-        <button
-          class="btn btn-xs {page <= 1 ? 'btn-disabled' : 'btn-outline'}"
-          onclick={() => goPage(page - 1)}
-          disabled={page <= 1}
-        >‹ 上一页</button>
-        <span class="text-xs text-gray-500 mx-2">第 {page} / {totalPages} 页</span>
-        <button
-          class="btn btn-xs {page >= totalPages ? 'btn-disabled' : 'btn-outline'}"
-          onclick={() => goPage(page + 1)}
-          disabled={page >= totalPages}
-        >下一页 ›</button>
-        <button
-          class="btn btn-xs {page >= totalPages ? 'btn-disabled' : 'btn-outline'}"
-          onclick={() => goPage(totalPages)}
-          disabled={page >= totalPages}
-        >末页 »</button>
-        <select
-          class="select select-bordered select-xs ml-2"
-          bind:value={pageSize}
-          onchange={() => { page = 1; load(); }}
-        >
-          <option value={20}>20/页</option>
-          <option value={50}>50/页</option>
-          <option value={100}>100/页</option>
-        </select>
+    <div class="flex flex-wrap items-center justify-between gap-2 mt-4">
+      <div class="text-xs text-[var(--c-text-secondary)]">
+        共 <span class="font-bold">{total}</span> 条 · 第 <span class="font-bold">{page}</span>/{totalPages} 页
       </div>
-    {/if}
+      <div class="join">
+        <button class="join-item btn btn-sm" onclick={() => goPage(1)} disabled={page <= 1}>«</button>
+        <button class="join-item btn btn-sm" onclick={() => goPage(page - 1)} disabled={page <= 1}>‹</button>
+        {#each pageList as p}
+          {#if p === '…'}
+            <button class="join-item btn btn-sm btn-disabled">…</button>
+          {:else}
+            <button
+              class="join-item btn btn-sm {p === page ? 'btn-primary' : ''}"
+              onclick={() => goPage(p)}
+            >{p}</button>
+          {/if}
+        {/each}
+        <button class="join-item btn btn-sm" onclick={() => goPage(page + 1)} disabled={page >= totalPages}>›</button>
+        <button class="join-item btn btn-sm" onclick={() => goPage(totalPages)} disabled={page >= totalPages}>»</button>
+      </div>
+      <select class="select select-bordered select-sm" bind:value={pageSize} onchange={changePageSize}>
+        <option value={50}>50 条/页</option>
+        <option value={100}>100 条/页</option>
+        <option value={200}>200 条/页</option>
+      </select>
+    </div>
   {/if}
 </div>

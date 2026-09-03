@@ -571,6 +571,7 @@ def build_admin_router(cfg: Config, repo_manager=None):
     def fetch_repo(repo_id: int, authorization: str = Header(None),
                    request: Request = None):
         """手动拉取仓库最新代码（异步，立即返回任务 ID）"""
+        from ..server import _get_repo_credential
         user = _get_user(authorization)
         with Session(engine) as session:
             row = session.execute(
