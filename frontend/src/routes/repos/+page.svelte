@@ -9,41 +9,86 @@
   let editingId = $state(null);
   let form = $state({ name: '', url: '', main_branch: 'main', credential_id: null, enabled: true, allow_write: false, allow_push: false, description: '' });
   let credentials = $state([]);
-  // 拉取状态
-  let fetchingId = $state(null);
+  // 拉取任务状态：{ [repoId]: { status, message, error } }
+  let fetchTasks = $state({});
   let toast = $state(null); // { type: 'success'|'error', message: string }
   let toastTimer = null;
+  // 轮询定时器
+  let pollTimers = {};
 
   const token = () => localStorage.getItem('token') || '';
 
   function showToast(type, message) {
     toast = { type, message };
     if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { toast = null; }, 3500);
+    toastTimer = setTimeout(() => { toast = null; }, 5000);
   }
 
   async function fetchRepo(r) {
-    if (fetchingId) return;
-    fetchingId = r.id;
-    console.log(`[拉取] 开始拉取仓库: ${r.name} (ID: ${r.id})`);
+    const task = fetchTasks[r.id];
+    if (task && task.status === 'running') return; // 已在拉取中
+
+    console.log(`[拉取] 提交拉取任务: ${r.name} (ID: ${r.id})`);
     try {
       const res = await fetch(`/api/admin/repos/${r.id}/fetch`, {
         method: 'POST', headers: { Authorization: token() }
       });
       const data = await res.json();
-      console.log(`[拉取] 服务器响应 (HTTP ${res.status}):`, data);
-      if (!res.ok) throw new Error(data.detail || '拉取失败');
-      showToast('success', `✅ ${r.name}：${data.message}`);
-      if (data.details) {
-        console.log(`[拉取] 更新详情:`, data.details);
-      }
-      await load(); // 刷新 last_fetched_at
+      if (!res.ok) throw new Error(data.detail || '提交失败');
+      console.log(`[拉取] 任务已提交: task_id=${data.task_id}`);
+
+      // 立即更新为运行中状态
+      fetchTasks[r.id] = { status: 'running', message: '拉取中...', error: null };
+      fetchTasks = { ...fetchTasks }; // 触发响应式更新
+
+      // 开始轮询
+      startPolling(r.id);
     } catch (e) {
-      console.error(`[拉取] 失败:`, e);
+      console.error(`[拉取] 提交失败:`, e);
       showToast('error', `❌ ${r.name}：${e.message}`);
-    } finally {
-      fetchingId = null;
     }
+  }
+
+  function startPolling(repoId) {
+    // 清除已有的轮询
+    if (pollTimers[repoId]) clearInterval(pollTimers[repoId]);
+
+    pollTimers[repoId] = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/admin/repos/${repoId}/fetch/status`, {
+          headers: { Authorization: token() }
+        });
+        if (!res.ok) return;
+        const status = await res.json();
+
+        fetchTasks[repoId] = status;
+        fetchTasks = { ...fetchTasks };
+
+        // 完成或出错后停止轮询，刷新列表
+        if (status.status === 'done' || status.status === 'error') {
+          stopPolling(repoId);
+          if (status.status === 'done') {
+            showToast('success', `✅ ${status.repo_name}：${status.message}`);
+          } else {
+            showToast('error', `❌ ${status.repo_name}：${status.error || status.message}`);
+          }
+          await load(); // 刷新 last_fetched_at
+        }
+      } catch (e) {
+        // 轮询错误不中断，下次继续
+      }
+    }, 2000); // 每 2 秒查询一次
+  }
+
+  function stopPolling(repoId) {
+    if (pollTimers[repoId]) {
+      clearInterval(pollTimers[repoId]);
+      delete pollTimers[repoId];
+    }
+  }
+
+  function getTaskStatus(r) {
+    return fetchTasks[r.id] || null;
   }
 
   async function load() {
@@ -178,6 +223,7 @@
         </thead>
         <tbody>
           {#each repos as r}
+            {@const task = getTaskStatus(r)}
             <tr>
               <td class="font-bold text-[var(--c-text)]">{r.name}</td>
               <td class="text-xs font-mono max-w-60 truncate text-[var(--c-text-secondary)]">{r.url}</td>
@@ -188,17 +234,20 @@
               </td>
               <td><span class="badge {r.enabled ? 'badge-success' : 'badge-ghost'} badge-xs">{r.enabled ? '启用' : '停用'}</span></td>
               <td class="text-xs whitespace-nowrap text-[var(--c-text-secondary)]">
-                {r.last_fetched_at ? new Date(r.last_fetched_at).toLocaleString() : '从未拉取'}
+                {#if task && task.status === 'running'}
+                  <span class="text-info">⏳ 拉取中...</span>
+                {:else}
+                  {r.last_fetched_at ? new Date(r.last_fetched_at).toLocaleString() : '从未拉取'}
+                {/if}
               </td>
               <td>
                 <div class="flex gap-1">
                   <button
-                    class="btn btn-xs {fetchingId === r.id ? 'btn-ghost' : 'btn-outline'}"
+                    class="btn btn-xs {task?.status === 'running' ? 'btn-ghost' : 'btn-outline'}"
                     onclick={() => fetchRepo(r)}
-                    disabled={fetchingId !== null}
                     title="拉取最新代码"
                   >
-                    {#if fetchingId === r.id}
+                    {#if task?.status === 'running'}
                       <span class="loading loading-spinner loading-xs"></span>
                       拉取中...
                     {:else}

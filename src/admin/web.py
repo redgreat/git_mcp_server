@@ -489,16 +489,88 @@ def build_admin_router(cfg: Config, repo_manager=None):
                     client_ip=get_client_ip(request))
         return {"ok": True}
 
+    # ---- 异步拉取任务管理 ----
+    import uuid as _uuid
+    import time as _time
+    import threading as _threading
+
+    _fetch_tasks: dict = {}
+    _fetch_tasks_lock = _threading.Lock()
+
+    def _start_fetch_task(repo_id: int, repo_name: str, repo_url: str,
+                           username: str, password: str, user: str, client_ip: str):
+        task_id = _uuid.uuid4().hex[:8]
+        with _fetch_tasks_lock:
+            _fetch_tasks[task_id] = {
+                "repo_id": repo_id,
+                "repo_name": repo_name,
+                "status": "running",
+                "message": "拉取中...",
+                "details": None,
+                "error": None,
+                "started_at": _time.time(),
+                "finished_at": None,
+            }
+
+        def _do_fetch():
+            from ..server import _get_repo_credential
+            from sqlalchemy import func as sa_func
+            try:
+                result = _run_fetch(repo_id, repo_name, repo_url, username, password)
+                with _fetch_tasks_lock:
+                    task = _fetch_tasks.get(task_id)
+                    if task:
+                        task["status"] = "done"
+                        task["message"] = result.get("message", "拉取完成")
+                        task["details"] = result.get("details", [])
+                        task["error"] = result.get("error")
+                        task["finished_at"] = _time.time()
+                _log_system(user, "fetch_repo", "repo", repo_id,
+                            {"name": repo_name}, client_ip=client_ip)
+            except Exception as e:
+                with _fetch_tasks_lock:
+                    task = _fetch_tasks.get(task_id)
+                    if task:
+                        task["status"] = "error"
+                        task["error"] = str(e)
+                        task["message"] = f"拉取失败: {e}"
+                        task["finished_at"] = _time.time()
+
+        t = _threading.Thread(target=_do_fetch, daemon=True)
+        t.start()
+        return task_id
+
+    def _run_fetch(repo_id: int, repo_name: str, repo_url: str,
+                   username: str, password: str) -> dict:
+        if repo_manager is None:
+            raise RuntimeError("仓库管理器未初始化")
+        try:
+            status = repo_manager.get_repo_status(repo_id)
+            if status:
+                result = repo_manager.fetch_and_report(repo_id, username, password)
+                if result["error"]:
+                    raise RuntimeError(result["error"])
+                message = f"拉取完成：{result['fetched']} 个引用，{result['updated']} 个有更新"
+                details = result.get("details", [])
+            else:
+                repo_manager.get_repo(repo_id, repo_name, repo_url, username, password)
+                message = "首次克隆完成，已获取最新代码"
+                details = []
+        except Exception as e:
+            raise
+        from sqlalchemy import func as sa_func
+        with Session(engine) as session:
+            session.execute(
+                update(git_repos).where(git_repos.c.id == repo_id)
+                .values(last_fetched_at=sa_func.now())
+            )
+            session.commit()
+        return {"ok": True, "message": message, "details": details}
+
     @router.post("/api/admin/repos/{repo_id}/fetch")
     def fetch_repo(repo_id: int, authorization: str = Header(None),
                    request: Request = None):
-        """手动拉取仓库最新代码（首次会触发克隆）"""
-        from ..server import _get_repo_credential
-        from sqlalchemy import func as sa_func
-
-        if repo_manager is None:
-            raise HTTPException(status_code=500, detail="仓库管理器未初始化")
-
+        """手动拉取仓库最新代码（异步，立即返回任务 ID）"""
         user = _get_user(authorization)
         with Session(engine) as session:
             row = session.execute(
@@ -511,35 +583,21 @@ def build_admin_router(cfg: Config, repo_manager=None):
 
         username, password = _get_repo_credential(engine, repo_id)
 
-        try:
-            status = repo_manager.get_repo_status(repo_id)
-            if status:
-                # 已缓存：强制 fetch 并统计
-                result = repo_manager.fetch_and_report(repo_id, username, password)
-                if result["error"]:
-                    raise HTTPException(status_code=500, detail=f"拉取失败: {result['error']}")
-                message = f"拉取完成：{result['fetched']} 个引用，{result['updated']} 个有更新"
-                details = result.get("details", [])
-            else:
-                # 未缓存：触发首次克隆（等价于拉到最新）
-                repo_manager.get_repo(repo_id, repo_name, repo_url, username, password)
-                message = "首次克隆完成，已获取最新代码"
-                details = []
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"拉取失败: {e}")
+        task_id = _start_fetch_task(repo_id, repo_name, repo_url, username, password, user, get_client_ip(request))
+        return {"ok": True, "task_id": task_id, "message": "拉取任务已提交，正在后台执行..."}
 
-        with Session(engine) as session:
-            session.execute(
-                update(git_repos).where(git_repos.c.id == repo_id)
-                .values(last_fetched_at=sa_func.now())
-            )
-            session.commit()
-
-        _log_system(user, "fetch_repo", "repo", repo_id,
-                    {"name": repo_name}, client_ip=get_client_ip(request))
-        return {"ok": True, "message": message, "details": details}
+    @router.get("/api/admin/repos/{repo_id}/fetch/status")
+    def fetch_status(repo_id: int):
+        """查询最近的拉取任务状态"""
+        with _fetch_tasks_lock:
+            latest = None
+            for tid, task in _fetch_tasks.items():
+                if task.get("repo_id") == repo_id:
+                    if latest is None or (task.get("started_at") and task["started_at"] > latest.get("started_at", 0)):
+                        latest = {**task, "task_id": tid}
+            if latest:
+                return latest
+        return {"status": "idle", "message": "暂无拉取任务"}
 
     # ========== 权限分配 ==========
 
