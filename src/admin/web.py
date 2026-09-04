@@ -65,6 +65,7 @@ class CreateRepoRequest(BaseModel):
 
 
 class UpdateRepoRequest(BaseModel):
+    name: Optional[str] = None
     url: Optional[str] = None
     main_branch: Optional[str] = None
     credential_id: Optional[int] = None
@@ -461,18 +462,22 @@ def build_admin_router(cfg: Config, repo_manager=None):
     def update_repo(repo_id: int, req: UpdateRepoRequest,
                     authorization: str = Header(None), request: Request = None):
         user = _get_user(authorization)
-        vals = {}
-        for k in ["url", "main_branch", "credential_id", "enabled",
-                   "allow_write", "allow_push", "description"]:
-            v = getattr(req, k, None)
-            if v is not None:
-                vals[k] = v
+        # 只更新客户端显式提交的字段（前端编辑时全量提交，含 name、credential_id=null 表示解除绑定）
+        if hasattr(req, "model_dump"):
+            payload = req.model_dump(exclude_unset=True)
+        else:
+            payload = req.dict(exclude_unset=True)
+        allowed = {"name", "url", "main_branch", "credential_id", "enabled",
+                   "allow_write", "allow_push", "description"}
+        vals = {k: v for k, v in payload.items() if k in allowed}
         if vals:
             with Session(engine) as session:
-                session.execute(
+                result = session.execute(
                     update(git_repos).where(git_repos.c.id == repo_id).values(**vals)
                 )
                 session.commit()
+                if result.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="仓库不存在")
         _log_system(user, "update_repo", "repo", repo_id, vals,
                     client_ip=get_client_ip(request))
         return {"ok": True}

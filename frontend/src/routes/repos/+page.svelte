@@ -156,14 +156,23 @@
   }
 
   async function save() {
-    const method = editingId ? 'PUT' : 'POST';
-    const url = editingId ? `/api/admin/repos/${editingId}` : '/api/admin/repos';
-    await fetch(url, {
-      method, headers: { 'Content-Type': 'application/json', Authorization: token() },
-      body: JSON.stringify(form)
-    });
-    showForm = false;
-    await load();
+    try {
+      const method = editingId ? 'PUT' : 'POST';
+      const url = editingId ? `/api/admin/repos/${editingId}` : '/api/admin/repos';
+      const res = await fetch(url, {
+        method, headers: { 'Content-Type': 'application/json', Authorization: token() },
+        body: JSON.stringify(form)
+      });
+      let data = {};
+      try { data = await res.json(); } catch (e) { /* 非 JSON 响应 */ }
+      if (!res.ok) throw new Error(data.detail || `保存失败 (HTTP ${res.status})`);
+      showToast('success', editingId ? `✅ 仓库「${form.name}」已更新` : `✅ 仓库「${form.name}」已创建`);
+      showForm = false;
+      await load();
+    } catch (e) {
+      console.error('[保存仓库] 失败:', e);
+      showToast('error', `❌ ${form.name}：${e.message}`);
+    }
   }
 
   async function remove(id) {
